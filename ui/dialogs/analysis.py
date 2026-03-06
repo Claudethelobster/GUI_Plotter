@@ -390,11 +390,15 @@ class PeakFinderTool(QDialog):
                 hz = self.peak_data_memory[r].get("center_hz", 0)
                 targets.append(f"{hz:.1f} Hz")
                 
+        # --- BULLETPROOF FIX: READ DIRECTLY FROM THE YELLOW DOTS ON SCREEN ---
         if getattr(self.parent_gui, 'selected_indices', set()):
-            x_vis, _, _, _ = self.parent_gui._get_all_plotted_xy(apply_selection=True)
-            if len(x_vis) > 0:
-                min_hz, max_hz = np.min(x_vis), np.max(x_vis)
-                targets.append(f"Box: {min_hz:.1f}-{max_hz:.1f} Hz")
+            try:
+                x_vis, _ = self.parent_gui.highlight_scatter.getData()
+                if x_vis is not None and len(x_vis) > 0:
+                    min_hz, max_hz = np.min(x_vis), np.max(x_vis)
+                    targets.append(f"Box: {min_hz:.1f}-{max_hz:.1f} Hz")
+            except Exception:
+                pass
                 
         if targets:
             self.selection_label.setText(f"<b>Targeted for removal:</b> {', '.join(targets)}")
@@ -570,12 +574,16 @@ class PeakFinderTool(QDialog):
         selected_rows = list(set([item.row() for item in self.table.selectedItems()]))
         table_cuts = [self.peak_data_memory[r] for r in selected_rows]
         
+        # --- BULLETPROOF FIX: APPLY THE SAME UI-READING LOGIC HERE ---
         manual_cuts = []
         if getattr(self.parent_gui, 'selected_indices', set()):
-            x_vis, _, _, _ = self.parent_gui._get_all_plotted_xy(apply_selection=True)
-            if len(x_vis) > 0:
-                min_hz, max_hz = np.min(x_vis), np.max(x_vis)
-                manual_cuts.append({"cut_left_hz": min_hz, "cut_right_hz": max_hz})
+            try:
+                x_vis, _ = self.parent_gui.highlight_scatter.getData()
+                if x_vis is not None and len(x_vis) > 0:
+                    min_hz, max_hz = np.min(x_vis), np.max(x_vis)
+                    manual_cuts.append({"cut_left_hz": min_hz, "cut_right_hz": max_hz})
+            except Exception:
+                pass
                 
         all_cuts = table_cuts + manual_cuts
         
@@ -643,22 +651,41 @@ class PeakFinderTool(QDialog):
             QApplication.processEvents()
             
             def on_ifft_loaded(ds):
+                # 1. Let the Main Window handle the standard file load safely.
+                self.parent_gui._is_plotting = True 
                 self.parent_gui._on_load_finished(ds, self.parent_gui.dataset.filename, opts)
+                self.parent_gui._is_plotting = False
                 
-                def apply_new_plot():
-                    new_col_idx = len(self.parent_gui.dataset.column_names) - 1
-                    self.parent_gui.ycol.blockSignals(False)
-                    self.parent_gui.ycol.setCurrentIndex(new_col_idx)
-                    self.parent_gui.update_current_series()
-                    self.parent_gui.plot()
-                    
-                    def post_plot_cleanup():
-                        self.run_peak_finder()
-                        self.parent_gui.clear_peak_markers()
-                        self.table.clearSelection() 
-                        
-                    QTimer.singleShot(600, post_plot_cleanup)
-                QTimer.singleShot(150, apply_new_plot)
+                # 2. SEARCH for the newly created column by its exact name!
+                new_col_idx = 0
+                for idx, col_name in ds.column_names.items():
+                    if col_name == new_name:
+                        new_col_idx = idx
+                        break
+                
+                # 3. Redirect the Y-Axis to the newly created filtered column
+                row = max(0, self.parent_gui.series_list.currentRow())
+                
+                if self.parent_gui.series_data.get("2D"):
+                    self.parent_gui.series_data["2D"][row]["y"] = new_col_idx
+                    self.parent_gui.series_data["2D"][row]["y_name"] = new_name
+                
+                # 4. Update the UI Dropdowns and Series List to reflect this change
+                self.parent_gui.ycol.blockSignals(True)
+                self.parent_gui.ycol.setCurrentIndex(new_col_idx)
+                self.parent_gui.ycol.blockSignals(False)
+                self.parent_gui._refresh_series_list_ui()
+                
+                # 5. Clean up the Peak Finder HUD
+                self.table.clearSelection()
+                self.table.setRowCount(0)
+                self.peak_data_memory.clear()
+                if hasattr(self, 'selection_label'):
+                    self.selection_label.setText("<b>Targeted for removal:</b> None")
+                self.parent_gui.clear_peak_markers()
+                
+                # 6. Plot the beautiful filtered spectrum!
+                self.parent_gui.plot()
                 
             self.parent_gui.loader_thread = DataLoaderThread(self.parent_gui.dataset.filename, opts)
             self.parent_gui.loader_thread.progress.connect(self.parent_gui._update_progress_ui)
