@@ -11,9 +11,9 @@ from PyQt5.QtWidgets import (
     QScrollArea, QWidget, QFileDialog, QMessageBox, QApplication, QTextEdit
 )
 
-from core.constants import PHYSICS_CONSTANTS, GREEK_MAP
-from ui.dialogs.data_mgmt import ConstantsDialog, CopyableErrorDialog
-from utils.function_io import load_function_from_file
+from badger_plot.core.constants import PHYSICS_CONSTANTS, GREEK_MAP
+from badger_plot.ui.dialogs.data_mgmt import ConstantsDialog, CopyableErrorDialog
+from badger_plot.utils.function_io import load_function_from_file
 
 class FitFunctionDialog(QDialog):
     def __init__(self, parent_gui):

@@ -12,8 +12,8 @@ from PyQt5.QtWidgets import (
     QTableView, QScrollArea, QMessageBox
 )
 
-from core.constants import PHYSICS_CONSTANTS
-from core.data_loader import BADGERLOOP_AVAILABLE
+from badger_plot.core.constants import PHYSICS_CONSTANTS
+from badger_plot.core.data_loader import BADGERLOOP_AVAILABLE
 
 class CopyableErrorDialog(QDialog):
     def __init__(self, title, header, details, parent=None):

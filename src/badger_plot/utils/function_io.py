@@ -1,7 +1,7 @@
 # utils/function_io.py
 import re
 import numpy as np
-from core.constants import PHYSICS_CONSTANTS
+from badger_plot.core.constants import PHYSICS_CONSTANTS
 
 def load_function_from_file(fname):
     with open(fname, "r") as f:

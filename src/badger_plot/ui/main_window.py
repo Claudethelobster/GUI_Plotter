@@ -15,21 +15,21 @@ from PyQt5.QtWidgets import (
 )
 
 # Core imports
-from core.data_loader import DataLoaderThread, CSVDataset, Dataset, BADGERLOOP_AVAILABLE
-from core.plot_worker import PlotWorkerThread
-from core.constants import PHYSICS_CONSTANTS, GREEK_MAP
+from badger_plot.core.data_loader import DataLoaderThread, CSVDataset, Dataset, BADGERLOOP_AVAILABLE
+from badger_plot.core.plot_worker import PlotWorkerThread
+from badger_plot.core.constants import PHYSICS_CONSTANTS, GREEK_MAP
 
 # UI Component imports
-from ui.custom_widgets import CustomAxisItem, DraggableLabel
-from ui.dialogs.data_mgmt import (
+from badger_plot.ui.custom_widgets import CustomAxisItem, DraggableLabel
+from badger_plot.ui.dialogs.data_mgmt import (
     FileImportDialog, SweepTableDialog, ManageColumnsDialog, 
     MetadataDialog, CreateColumnDialog, CopyableErrorDialog
 )
-from ui.dialogs.analysis import SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool
-from ui.dialogs.fitting import (
+from badger_plot.ui.dialogs.analysis import SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool
+from badger_plot.ui.dialogs.fitting import (
     FitFunctionDialog, CustomFitDialog, MultiFitManagerDialog, FitDataToFunctionWindow
 )
-from ui.dialogs.help import HelpDialog
+from badger_plot.ui.dialogs.help import HelpDialog
 
 try:
     import pyqtgraph.opengl as gl
