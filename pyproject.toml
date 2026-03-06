@@ -12,6 +12,8 @@ dependencies = [
     "scipy",
     "PyQt5",
     "pyqtgraph",
+    "PyOpenGL",
+    "PyOpenGL_accelerate",
     "matplotlib"
 ]
 
