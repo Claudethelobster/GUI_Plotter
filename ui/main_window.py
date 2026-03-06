@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QLineEdit, QComboBox, QStackedLayout, 
     QMessageBox, QProgressDialog, QListWidget, QAction, QGridLayout, 
-    QButtonGroup, QApplication, QDialog, QFormLayout
+    QButtonGroup, QApplication, QDialog, QFormLayout, QTextEdit
 )
 
 # Core imports
@@ -314,8 +314,12 @@ class BadgerLoopQtGraph(QMainWindow):
             else: b.setStyleSheet(inactive_style)
 
     def eventFilter(self, source, event):
+        # --- NEW SAFETY SHIELD: Ignore events if the UI isn't fully built yet ---
+        if not hasattr(self, 'plot_widget') or self.plot_widget is None:
+            return super().eventFilter(source, event)
+            
         if source == self.plot_widget.getViewBox() or source == getattr(self, 'vb_right', None):
-            if getattr(self, 'interaction_mode', 'pan') != "pan" and self.plot_mode == "2D":
+            if getattr(self, 'interaction_mode', 'pan') != "pan" and getattr(self, 'plot_mode', '2D') == "2D":
                 if event.type() == QEvent.GraphicsSceneMousePress and event.button() == Qt.LeftButton:
                     self._start_selection(event)
                     return True 
@@ -1006,6 +1010,43 @@ class BadgerLoopQtGraph(QMainWindow):
 
         self._show_actual_manage_columns_dialog()
 
+    def _show_actual_manage_columns_dialog(self):
+        """ The standard dialog logic that actually applies the change to the safe file. """
+        dlg = ManageColumnsDialog(self.dataset, self)
+        if dlg.exec() != QDialog.Accepted: return
+    
+        action, col_idx, new_name = dlg.get_result()
+        
+        if action == "rename":
+            if not new_name: return
+            if not self.confirm_permanent_change(f"This will permanently change the column name in the mirror file:\n{os.path.basename(self.dataset.filename)}\n\nAre you sure?"): return
+            self._rewrite_column_name_in_file(self.dataset.filename, col_idx, new_name)
+            
+        elif action == "delete":
+            col_name = self.dataset.column_names.get(col_idx, "Unknown")
+            ans = QMessageBox.warning(
+                self, "Confirm Deletion", 
+                f"Are you sure you want to permanently delete the column '{col_name}' from the mirror file?\n\nThis action is irreversible.", 
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if ans != QMessageBox.Yes: return
+            self._delete_column_in_file(self.dataset.filename, col_idx)
+
+        # Trigger full dataset reload to sync memory, arrays, and UI instantly
+        opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+        self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.show()
+        QApplication.processEvents()
+        
+        self.loader_thread = DataLoaderThread(self.dataset.filename, opts)
+        self.loader_thread.progress.connect(self._update_progress_ui)
+        self.loader_thread.finished.connect(lambda ds: self._on_load_finished(ds, self.dataset.filename, opts))
+        self.loader_thread.error.connect(self._on_load_error)
+        self.loader_thread.start()
+
     def prompt_create_column(self):
         if not self.dataset: return
         fname = self.dataset.filename
@@ -1596,19 +1637,14 @@ class BadgerLoopQtGraph(QMainWindow):
         if hasattr(self, 'phantom_curve'): self.phantom_curve.setVisible(False)
         raw_eq, py_eq, html_eq, used_cols, param_names, param_config = dlg.get_result()
         
-        res_full = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=False)
-        if len(res_full) < 4 or len(res_full[0]) == 0: return
-        x_full, y_full, aux_full, pair = res_full
+        # 1. Grab JUST the selected points for the math solver
+        res_calc = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=True)
+        if len(res_calc) < 4 or len(res_calc[0]) == 0: return
+        x_calc, y_calc, aux_calc, pair = res_calc
         
-        if getattr(self, 'selected_indices', set()):
-            idx = sorted(list(self.selected_indices))
-            x_calc = x_full[idx]
-            y_calc = y_full[idx]
-            aux_calc = {c: aux_full[c][idx] for c in used_cols}
-        else:
-            x_calc = x_full
-            y_calc = y_full
-            aux_calc = aux_full
+        # 2. Grab the FULL dataset so we can draw the line across the whole screen later
+        res_full = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=False)
+        x_full, y_full, aux_full, _ = res_full
         
         def custom_model_calc(x_val, *args):
             env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "data_dict": aux_calc}
@@ -1659,6 +1695,7 @@ class BadgerLoopQtGraph(QMainWindow):
         if row >= len(self.series_data["2D"]): return [], [], None, {}
         pair = self.series_data["2D"][row]
         
+        # --- INTERCEPT FFT MODE ---
         if getattr(self, 'fft_mode_active', False) and hasattr(self, 'last_plotted_data'):
             pkgs = [p for p in self.last_plotted_data.get('packages', []) if p.get("pair_idx", 0) == row and p.get("type") == "standard"]
             if pkgs:
@@ -1669,7 +1706,21 @@ class BadgerLoopQtGraph(QMainWindow):
                     valid_idx = idx[idx < len(x_fft)]
                     return x_fft[valid_idx], y_fft[valid_idx], None, pair
                 return x_fft, y_fft, None, pair
-        
+
+        # --- INTERCEPT AVERAGING MODE ---
+        if getattr(self, 'average_enabled', False) and hasattr(self, 'last_plotted_data'):
+            pkgs = [p for p in self.last_plotted_data.get('packages', []) if p.get("pair_idx", 0) == row and p.get("type") == "average"]
+            if pkgs:
+                # Pluck the pre-calculated means directly from the renderer's memory!
+                x_avg = np.array([p['x_mean'] for p in pkgs], dtype=np.float64)
+                y_avg = np.array([p['y_mean'] for p in pkgs], dtype=np.float64)
+                if apply_selection and getattr(self, 'selected_indices', set()):
+                    idx = np.array(list(self.selected_indices))
+                    valid_idx = idx[idx < len(x_avg)]
+                    return x_avg[valid_idx], y_avg[valid_idx], None, pair
+                return x_avg, y_avg, None, pair
+
+        # --- STANDARD RAW DATA RETRIEVAL ---
         xidx, yidx = pair['x'], pair['y']
         aux_dict = {}
         
@@ -1679,11 +1730,50 @@ class BadgerLoopQtGraph(QMainWindow):
             if aux_cols:
                 for c in aux_cols: aux_dict[c] = np.asarray(self.dataset.data[:, c], dtype=np.float64)
         else:
-            sw = self.dataset.sweeps[0].data
-            x = np.asarray(sw[:, xidx], dtype=np.float64)
-            y = np.asarray(sw[:, yidx], dtype=np.float64)
+            sweeps = self.parse_list(self.sweeps_edit.text())
+            if sweeps == -1: sweeps = list(range(self.dataset.num_sweeps))
+            
+            x_list, y_list = [], []
             if aux_cols:
-                for c in aux_cols: aux_dict[c] = np.asarray(sw[:, c], dtype=np.float64)
+                for c in aux_cols: aux_dict[c] = []
+                
+            for sw_idx in sweeps:
+                if sw_idx >= len(self.dataset.sweeps): continue
+                sw = self.dataset.sweeps[sw_idx].data
+                x_list.append(np.asarray(sw[:, xidx], dtype=np.float64))
+                y_list.append(np.asarray(sw[:, yidx], dtype=np.float64))
+                if aux_cols:
+                    for c in aux_cols: aux_dict[c].append(np.asarray(sw[:, c], dtype=np.float64))
+                    
+            if x_list:
+                x = np.concatenate(x_list)
+                y = np.concatenate(y_list)
+                if aux_cols:
+                    for c in aux_cols: aux_dict[c] = np.concatenate(aux_dict[c])
+            else:
+                x, y = np.array([]), np.array([])
+                
+        xlog = self.xscale.currentText() == "Log"
+        ylog = self.yscale.currentText() == "Log"
+        xbase = getattr(self, '_parse_log_base', lambda val: 10.0)(self.xbase.text())
+        ybase = getattr(self, '_parse_log_base', lambda val: 10.0)(self.ybase.text())
+        
+        with np.errstate(divide='ignore', invalid='ignore'):
+            if xlog: 
+                mask = x > 0
+                x, y = np.log(x[mask]) / np.log(xbase), y[mask]
+                if aux_cols:
+                    for c in aux_cols: aux_dict[c] = aux_dict[c][mask]
+            if ylog:
+                mask = y > 0
+                x, y = x[mask], np.log(y[mask]) / np.log(ybase)
+                if aux_cols:
+                    for c in aux_cols: aux_dict[c] = aux_dict[c][mask]
+                    
+        valid = np.isfinite(x) & np.isfinite(y)
+        x, y = x[valid], y[valid]
+        if aux_cols:
+            for c in aux_cols: aux_dict[c] = aux_dict[c][valid]
             
         if apply_selection and getattr(self, 'selected_indices', set()):
             idx = np.array(list(self.selected_indices))
@@ -1718,19 +1808,14 @@ class BadgerLoopQtGraph(QMainWindow):
                 
                 raw_eq, py_eq, html_eq, used_cols, param_names, param_config = dlg.get_result()
                 
-                res_full = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=False)
-                if len(res_full) < 4 or len(res_full[0]) == 0: return
-                x_full, y_full, aux_full, pair = res_full
+                # 1. Grab JUST the selected points for the math solver
+                res_calc = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=True)
+                if len(res_calc) < 4 or len(res_calc[0]) == 0: return
+                x_calc, y_calc, aux_calc, pair = res_calc
                 
-                if getattr(self, 'selected_indices', set()):
-                    idx = sorted(list(self.selected_indices))
-                    x_calc = x_full[idx]
-                    y_calc = y_full[idx]
-                    aux_calc = {c: aux_full[c][idx] for c in used_cols}
-                else:
-                    x_calc = x_full
-                    y_calc = y_full
-                    aux_calc = aux_full
+                # 2. Grab the FULL dataset so we can draw the line across the whole screen later
+                res_full = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=False)
+                x_full, y_full, aux_full, _ = res_full
                 
                 def custom_model_calc(x_val, *args):
                     env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "data_dict": aux_calc}
@@ -1804,7 +1889,7 @@ class BadgerLoopQtGraph(QMainWindow):
         return x_raw, y_raw
 
     def fit_polynomial(self, degree, param_config):
-        res = self._get_all_plotted_xy()
+        res = self._get_all_plotted_xy(apply_selection=True)
         if len(res) < 4 or len(res[0]) == 0: return
         x, y, _, pair = res
 
@@ -1847,7 +1932,7 @@ class BadgerLoopQtGraph(QMainWindow):
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
 
     def fit_logarithmic(self, base_text, param_config):
-        res = self._get_all_plotted_xy()
+        res = self._get_all_plotted_xy(apply_selection=True)
         if len(res) < 4 or len(res[0]) == 0: return
         x, y, _, pair = res
 
@@ -1886,7 +1971,7 @@ class BadgerLoopQtGraph(QMainWindow):
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
 
     def fit_exponential(self, param_config):
-        res = self._get_all_plotted_xy()
+        res = self._get_all_plotted_xy(apply_selection=True)
         if len(res) < 4 or len(res[0]) == 0: return
         x, y, _, pair = res
 
@@ -1918,7 +2003,7 @@ class BadgerLoopQtGraph(QMainWindow):
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
 
     def fit_gaussian(self, param_config):
-        res = self._get_all_plotted_xy()
+        res = self._get_all_plotted_xy(apply_selection=True)
         if len(res) < 4 or len(res[0]) == 0: return
         x, y, _, pair = res
 
@@ -1954,7 +2039,7 @@ class BadgerLoopQtGraph(QMainWindow):
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
 
     def fit_lorentzian(self, param_config):
-        res = self._get_all_plotted_xy()
+        res = self._get_all_plotted_xy(apply_selection=True)
         if len(res) < 4 or len(res[0]) == 0: return
         x, y, _, pair = res
 
