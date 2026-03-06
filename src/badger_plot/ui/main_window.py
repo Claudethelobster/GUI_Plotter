@@ -3239,6 +3239,11 @@ class BadgerLoopQtGraph(QMainWindow):
         CopyableErrorDialog("Loading Error", "An error occurred while loading the data.", err_msg, self).exec()
 
     def populate_columns(self):
+        # --- BLOCK SIGNALS SO CLEARING DOES NOT WIPE MEMORY ---
+        self.xcol.blockSignals(True)
+        self.ycol.blockSignals(True)
+        self.zcol.blockSignals(True)
+        
         self.xcol.clear()
         self.ycol.clear()
         self.zcol.clear()
@@ -3258,6 +3263,11 @@ class BadgerLoopQtGraph(QMainWindow):
             self.xuncert.addItem(label)
             self.yuncert.addItem(label)
             self.zuncert.addItem(label)
+            
+        # --- UNBLOCK SIGNALS ---
+        self.xcol.blockSignals(False)
+        self.ycol.blockSignals(False)
+        self.zcol.blockSignals(False)
 
     def _prompt_custom_axis_label(self, orientation):
         from PyQt5.QtWidgets import QInputDialog
@@ -3588,29 +3598,33 @@ class BadgerLoopQtGraph(QMainWindow):
                 top_axis.setGrid(0)
 
             if packages:
+                is_fft = getattr(self, 'fft_mode_active', False)
+                
+                # Setup Bottom/Left Labels
                 if left_pkgs:
                     default_x_l = left_pkgs[0].get("x_name", "X Axis") if len(set([p.get("x_name") for p in left_pkgs])) == 1 else "Bottom X"
-                    final_x_l = self.custom_axis_labels.get("bottom") or default_x_l
+                    final_x_l = default_x_l if is_fft else (self.custom_axis_labels.get("bottom") or default_x_l)
                     self.plot_widget.setLabel("bottom", final_x_l)
                     
                     default_y_l = left_pkgs[0].get("y_name", "Y Axis") if len(set([p.get("y_name") for p in left_pkgs])) == 1 else "Left Values"
-                    final_y_l = self.custom_axis_labels.get("left") or default_y_l
+                    final_y_l = default_y_l if is_fft else (self.custom_axis_labels.get("left") or default_y_l)
                     self.plot_widget.setLabel("left", final_y_l)
                 else:
                     self.plot_widget.setLabel("bottom", "")
                     self.plot_widget.setLabel("left", "")
                     
+                # Setup Top/Right Labels
                 if right_pkgs:
                     if not x_shared:
                         default_x_r = right_pkgs[0].get("x_name", "X Axis") if len(set([p.get("x_name") for p in right_pkgs])) == 1 else "Top X"
-                        final_x_r = self.custom_axis_labels.get("top") or default_x_r
+                        final_x_r = default_x_r if is_fft else (self.custom_axis_labels.get("top") or default_x_r)
                         self.plot_widget.setLabel("top", final_x_r, color='#d90000')
                     else:
                         self.plot_widget.setLabel("top", "") 
                         
                     if not y_shared:
                         default_y_r = right_pkgs[0].get("y_name", "Y Axis") if len(set([p.get("y_name") for p in right_pkgs])) == 1 else "Right Values"
-                        final_y_r = self.custom_axis_labels.get("right") or default_y_r
+                        final_y_r = default_y_r if is_fft else (self.custom_axis_labels.get("right") or default_y_r)
                         self.plot_widget.setLabel("right", final_y_r, color='#d90000')
                     else:
                         self.plot_widget.setLabel("right", "") 

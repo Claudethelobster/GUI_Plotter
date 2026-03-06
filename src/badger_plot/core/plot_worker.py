@@ -71,7 +71,42 @@ class PlotWorkerThread(QThread):
                         
                         x, y = get_fast_xyz(sw, pair)
                         x, y = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
+                        
+                        x_name_out = pair.get("x_name", "X")
+                        y_name_out = pair.get("y_name", "Y")
 
+                        # =======================================================
+                        # FFT MODE LOGIC - Done BEFORE Log Scaling!
+                        # =======================================================
+                        if p.get("fft_mode_active", False):
+                            valid_fft = np.isfinite(x) & np.isfinite(y)
+                            x_f, y_f = x[valid_fft], y[valid_fft]
+                            if len(x_f) >= 2:
+                                # Must sort data chronologically so time-delta (dt) is physically correct!
+                                sort_idx = np.argsort(x_f)
+                                x_f, y_f = x_f[sort_idx], y_f[sort_idx]
+                                
+                                dt = np.abs(x_f[-1] - x_f[0]) / max(1, len(x_f) - 1)
+                                if dt > 0:
+                                    window = np.hanning(len(y_f))
+                                    y_wind = y_f * window
+                                    
+                                    yf = np.fft.rfft(y_wind)
+                                    xf = np.fft.rfftfreq(len(y_wind), d=dt)
+                                    
+                                    mag = np.abs(yf) * 2.0 / len(y_wind)
+                                    
+                                    if len(xf) > 1:
+                                        xf = xf[1:]
+                                        mag = mag[1:]
+                                        
+                                    x, y = xf, mag
+                                    
+                            x_name_out = f"Frequency (Hz) [1/{pair.get('x_name', 'X')}]"
+                            y_name_out = f"Magnitude [{pair.get('y_name', 'Y')}]"
+                        # =======================================================
+
+                        # Apply Log Scales AFTER FFT (or normally for Time Domain)
                         with np.errstate(divide='ignore', invalid='ignore'):
                             if xlog:
                                 mask = x > 0
@@ -85,37 +120,13 @@ class PlotWorkerThread(QThread):
                         
                         if len(x) == 0: continue
                         
-                        # FFT MODE LOGIC
-                        if p.get("fft_mode_active", False):
-                            if len(x) < 2: continue
-                            
-                            dt = np.abs(x[-1] - x[0]) / max(1, len(x) - 1)
-                            if dt == 0: continue
-                            
-                            window = np.hanning(len(y))
-                            y_wind = y * window
-                            
-                            yf = np.fft.rfft(y_wind)
-                            xf = np.fft.rfftfreq(len(y_wind), d=dt)
-                            
-                            mag = np.abs(yf) * 2.0 / len(y_wind)
-                            
-                            if len(xf) > 1:
-                                xf = xf[1:]
-                                mag = mag[1:]
-                                
-                            x, y = xf, mag
-                            
-                            pair["x_name"] = f"Frequency [1/{pair.get('x_name', 'X')}]"
-                            pair["y_name"] = f"Magnitude [{pair.get('y_name', 'Y')}]"
-                        
                         pkg = {
                             "i": i, 
                             "sw": sw,
                             "pair_idx": pair_idx, 
                             "cmap_name": cmap_name, 
-                            "y_name": pair["y_name"],
-                            "x_name": pair["x_name"],
+                            "y_name": y_name_out,
+                            "x_name": x_name_out,
                             "axis": pair.get("axis", "L")
                         }
                         
