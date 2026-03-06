@@ -8,7 +8,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog, QMainWindow, QVBoxLayout, QHBoxLayout, QFormLayout,
     QComboBox, QLineEdit, QLabel, QPushButton, QTableWidget, QHeaderView,
-    QScrollArea, QWidget, QFileDialog, QMessageBox, QApplication
+    QScrollArea, QWidget, QFileDialog, QMessageBox, QApplication, QTextEdit
 )
 
 from core.constants import PHYSICS_CONSTANTS, GREEK_MAP
