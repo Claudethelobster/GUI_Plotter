@@ -9,7 +9,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 # --- SAFE IMPORT FOR NATIVE BADGERLOOP FILES ---
 try:
-    from badger_loop_py3_3 import Dataset
+    from badger_plot.badger_loop_py3_3 import Dataset
     BADGERLOOP_AVAILABLE = True
 except ImportError:
     BADGERLOOP_AVAILABLE = False

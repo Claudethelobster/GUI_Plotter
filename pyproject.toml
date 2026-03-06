@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "badger_plot"
+version = "1.0.0"
+authors = [{name="Claudethelobster"}]
+requires-python = ">=3.13"
+dependencies = [
+    "numpy",
+    "scipy",
+    "PyQt5",
+    "pyqtgraph",
+    "PyOpenGL",
+    "PyOpenGL_accelerate",
+    "matplotlib"
+]
+
+[project.scripts]
+badger_plot = "badger_plot.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Claudethelobster/GUI_Plotter"
+
+[tools.setuptools]
+packages = ["badger_pltr"]
+include-package-data = true

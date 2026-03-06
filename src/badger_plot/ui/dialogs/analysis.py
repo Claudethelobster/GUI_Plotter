@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView, QGroupBox, QButtonGroup, QMessageBox, QApplication, QProgressDialog
 )
 
-from core.data_loader import DataLoaderThread
+from badger_plot.core.data_loader import DataLoaderThread
 
 class SignalProcessingDialog(QDialog):
     preview_updated = pyqtSignal(object, object)
