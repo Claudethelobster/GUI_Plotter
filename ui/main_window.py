@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QLineEdit, QComboBox, QStackedLayout, 
     QMessageBox, QProgressDialog, QListWidget, QAction, QGridLayout, 
-    QButtonGroup, QApplication
+    QButtonGroup, QApplication, QDialog, QFormLayout
 )
 
 # Core imports
@@ -737,46 +737,107 @@ class BadgerLoopQtGraph(QMainWindow):
             return
         self.phantom_curve.setData(x_prev[valid], y_prev[valid])
         self.phantom_curve.setVisible(True)
+        
+    def show_metadata(self):
+        if self.dataset:
+            MetadataDialog(self.dataset, self).exec()
+        
+    def open_peak_finder(self):
+        if not self.dataset: return
+        
+        if not hasattr(self, 'peak_finder_tool') or self.peak_finder_tool is None:
+            self.peak_finder_tool = PeakFinderTool(self)
+            
+        self.peak_finder_tool.show()
+        self.peak_finder_tool.raise_()
+        self.peak_finder_tool.activateWindow()
+
+    def draw_peak_markers(self, peaks_x, peaks_y, left_x, right_x, width_heights, axis_side):
+        self.clear_peak_markers()
+        self.peak_markers = []
+        
+        target_vb = self.vb_right if axis_side == "R" else self.plot_widget
+        
+        import pyqtgraph as pg
+        from PyQt5.QtCore import Qt
+        
+        # 1. Draw the Green Stars at the very tip of the peaks
+        scatter = pg.ScatterPlotItem(x=peaks_x, y=peaks_y, size=14, pen=pg.mkPen('k', width=1.5), brush=pg.mkBrush('#00ff00'), symbol='star')
+        target_vb.addItem(scatter)
+        self.peak_markers.append((scatter, target_vb))
+        
+        # 2. Draw the horizontal FWHM lines (Red)
+        for lx, rx, h in zip(left_x, right_x, width_heights):
+            line = pg.PlotCurveItem(x=[lx, rx], y=[h, h], pen=pg.mkPen('r', width=2.5))
+            target_vb.addItem(line)
+            self.peak_markers.append((line, target_vb))
+            
+        # 3. Draw vertical dashed lines dropping down from the peak
+        for px in peaks_x:
+            vline = pg.InfiniteLine(pos=px, angle=90, pen=pg.mkPen((150, 150, 150, 150), style=Qt.DashLine))
+            target_vb.addItem(vline)
+            self.peak_markers.append((vline, target_vb))
+
+    def clear_peak_markers(self):
+        if hasattr(self, 'peak_markers'):
+            for item, vb in self.peak_markers:
+                try: vb.removeItem(item)
+                except: pass
+            self.peak_markers.clear()
 
     def _build_menu(self):
         menubar = self.menuBar()
+        
+        # File Menu
         file_menu = menubar.addMenu("File")
-        file_menu.addAction(QAction("Open Data File", self)).triggered.connect(self.open_file)
+        open_action = QAction("Open Data File", self)
+        open_action.triggered.connect(self.open_file)
+        file_menu.addAction(open_action)
     
+        # Inspect Menu
         inspect_menu = menubar.addMenu("Inspect")
         self.inspect_table_action = inspect_menu.addAction("Sweep table")
         self.inspect_table_action.triggered.connect(self.prompt_sweep_table)
         inspect_menu.addAction("Rename / Delete columns").triggered.connect(self.manage_columns_dialog)
         inspect_menu.addAction("Create custom column").triggered.connect(self.prompt_create_column)
         inspect_menu.addSeparator()
-        crosshair_action = inspect_menu.addAction("Toggle crosshairs")
+        
+        crosshair_action = QAction("Toggle crosshairs", self)
         crosshair_action.setShortcut("Ctrl+H") 
         crosshair_action.triggered.connect(self.toggle_crosshairs)
+        inspect_menu.addAction(crosshair_action)
         
+        # Analysis Menu
         analysis_menu = menubar.addMenu("Analysis")
         analysis_menu.addAction("Signal Processing (Smooth / Calculus)").triggered.connect(self.open_signal_processing)
         analysis_menu.addAction("Phase Space Generator (x vs dx/dt)").triggered.connect(self.open_phase_space_dialog)
         analysis_menu.addAction("Automated Peak Finder & iFFT Surgeon").triggered.connect(self.open_peak_finder)
         
+        # Layout Menu
         layout_menu = menubar.addMenu("Layout")
         layout_action = QAction("Plot Settings & Slicing...", self)
         layout_action.setShortcut("Ctrl+L")
         layout_action.triggered.connect(self.open_layout_dialog)
         layout_menu.addAction(layout_action)
     
+        # Fitting Menu
         self.fitting_menu = menubar.addMenu("Fitting")
         self.fitting_menu.addAction("Fit common function to data").triggered.connect(self.open_fit_function_dialog)
         self.fitting_menu.addAction("Fit custom function to data").triggered.connect(self.open_custom_fit_dialog)
         self.fitting_menu.addAction("Fit data to function").triggered.connect(self.open_fit_data_to_function)
 
+        # Plot Mode Menu
         plot_mode_menu = menubar.addMenu("Plot Mode")
         plot_mode_menu.addAction("2D Plot").triggered.connect(lambda: self.set_plot_mode("2D"))
         self.plot_3d_action = plot_mode_menu.addAction("3D Plot")
         self.plot_3d_action.triggered.connect(lambda: self.set_plot_mode("3D"))
         plot_mode_menu.addAction("Heat Map").triggered.connect(lambda: self.set_plot_mode("Heatmap"))
         
+        # Help Menu
         help_menu = menubar.addMenu("Help")
-        help_menu.addAction(QAction("How to use", self)).triggered.connect(self.show_help)
+        help_action = QAction("How to use", self)
+        help_action.triggered.connect(self.show_help)
+        help_menu.addAction(help_action)
 
     def _update_selection_stats(self):
         if not getattr(self, 'selected_indices', set()):
@@ -1994,6 +2055,29 @@ class BadgerLoopQtGraph(QMainWindow):
         self.layout_dialog.show()
         self.layout_dialog.raise_()
         self.layout_dialog.activateWindow()
+        
+    def _update_graphtype_dropdown(self):
+        """ Dynamically updates the available Graph Types based on the current Plot Mode """
+        current_selection = self.graphtype.currentText()
+        
+        self.graphtype.blockSignals(True)
+        self.graphtype.clear()
+        
+        if self.plot_mode == "2D":
+            self.graphtype.addItems(["Line", "Scatter"]) # FFT removed! Handled globally now.
+        elif self.plot_mode == "3D":
+            self.graphtype.addItems(["Line", "Scatter", "Surface"])
+        elif self.plot_mode == "Heatmap":
+            self.graphtype.addItems(["Heatmap Default"])
+            
+        index = self.graphtype.findText(current_selection)
+        if index >= 0:
+            self.graphtype.setCurrentIndex(index)
+        else:
+            self.graphtype.setCurrentIndex(0)
+            
+        self.graphtype.blockSignals(False)
+        self._update_graphtype_ui()
         
     def _update_graphtype_ui(self):
         is_heatmap = (self.plot_mode == "Heatmap")
@@ -3721,6 +3805,51 @@ class BadgerLoopQtGraph(QMainWindow):
             QMessageBox.critical(self, "Rendering Error", f"A fatal error occurred while drawing the Heatmap.\n\n{e}\n\n{traceback.format_exc()}")
         finally:
             self._is_plotting = False
+            
+    def save_plot(self):
+        # Limit export formats for 3D since OpenGL renders as a pixel buffer (no SVG support)
+        if self.plot_mode == "3D":
+            file_filter = "PNG (*.png);;JPEG (*.jpg)"
+        else:
+            file_filter = "PNG (*.png);;JPEG (*.jpg);;SVG (*.svg)"
+
+        fname, _ = QFileDialog.getSaveFileName(
+            self, "Save Plot", "", file_filter
+        )
+        if not fname:
+            return
+
+        # Apply default extension if the user didn't type one
+        if not os.path.splitext(fname)[1]:
+            fname += ".png"
+
+        # ==========================================
+        # 3D SAVE LOGIC
+        # ==========================================
+        if self.plot_mode == "3D":
+            # Grab the current frame buffer from the OpenGL widget
+            img = self.gl_widget.readQImage()
+            img.save(fname)
+            return
+
+        # ==========================================
+        # 2D / HEATMAP SAVE LOGIC
+        # ==========================================
+        # Hide the interactive scaler temporarily if we're in Heatmap mode
+        if self.plot_mode == "Heatmap":
+            self.heatmap_item.vb.hide()
+            QApplication.processEvents() # Force UI to update before exporting
+
+        exporter = (
+            pgexp.SVGExporter(self.plot_widget.plotItem)
+            if fname.lower().endswith(".svg")
+            else pgexp.ImageExporter(self.plot_widget.plotItem)
+        )
+        exporter.export(fname)
+
+        # Restore the interactive scaler
+        if self.plot_mode == "Heatmap":
+            self.heatmap_item.vb.show()
             
     def export_plotted_data(self):
         if not getattr(self, 'last_plotted_data', None):
