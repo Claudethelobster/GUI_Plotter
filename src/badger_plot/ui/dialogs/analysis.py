@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView, QGroupBox, QButtonGroup, QMessageBox, QApplication, QProgressDialog
 )
 
-from badger_plot.core.data_loader import DataLoaderThread
+from core.data_loader import DataLoaderThread
 
 class SignalProcessingDialog(QDialog):
     preview_updated = pyqtSignal(object, object)
@@ -390,12 +390,12 @@ class PeakFinderTool(QDialog):
                 hz = self.peak_data_memory[r].get("center_hz", 0)
                 targets.append(f"{hz:.1f} Hz")
                 
-        # --- BULLETPROOF FIX: READ DIRECTLY FROM THE YELLOW DOTS ON SCREEN ---
+        # --- NEW SOURCE OF TRUTH: Read the math arrays, NOT the UI dots! ---
         if getattr(self.parent_gui, 'selected_indices', set()):
             try:
-                x_vis, _ = self.parent_gui.highlight_scatter.getData()
-                if x_vis is not None and len(x_vis) > 0:
-                    min_hz, max_hz = np.min(x_vis), np.max(x_vis)
+                x_sel, _, _, _ = self.parent_gui._get_all_plotted_xy(apply_selection=True)
+                if x_sel is not None and len(x_sel) > 0:
+                    min_hz, max_hz = np.min(x_sel), np.max(x_sel)
                     targets.append(f"Box: {min_hz:.1f}-{max_hz:.1f} Hz")
             except Exception:
                 pass
@@ -485,9 +485,22 @@ class PeakFinderTool(QDialog):
                 return
                 
         proms = properties['prominences']
-        left_x_vis, right_x_vis, width_real, width_heights = [], [], [], []
+        left_x_vis, right_x_vis, width_heights = [], [], []
 
         import warnings
+        from PyQt5.QtWidgets import QTableWidgetItem
+        
+        self.table.setRowCount(len(peaks))
+        self.peak_data_memory.clear()
+        
+        known_noise = []
+        if self.fft_toggle_btn.isChecked():
+            try: known_noise = [float(val.strip()) for val in self.noise_flag_edit.text().split(",") if val.strip()]
+            except: pass
+
+        peak_x_vis = []
+        peak_y_vis = []
+
         for i, p in enumerate(peaks):
             if "FWHM" in mode: rel_h = 0.5
             elif "FWQM" in mode: rel_h = 0.75 
@@ -498,48 +511,52 @@ class PeakFinderTool(QDialog):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 w, w_h, l_ips, r_ips = sig.peak_widths(y, [p], rel_height=rel_h)
+                _, _, base_l_ips, base_r_ips = sig.peak_widths(y, [p], rel_height=0.98) # Wide cut bounds for the surgeon
                 
-            lx_v = np.interp(l_ips[0], np.arange(len(x)), x)
-            rx_v = np.interp(r_ips[0], np.arange(len(x)), x)
+            # --- MAP INDICES TO THE ACTUAL X-AXIS (Hz) ---
+            # By forcing float(), we stop PyQt from choking on NumPy arrays!
+            center_hz = float(x_raw[p])
+            peak_height = float(y[p])
+            
+            # True physical boundaries for the Surgeon to cut
+            cut_left = float(np.interp(base_l_ips[0], np.arange(len(x)), x_raw))
+            cut_right = float(np.interp(base_r_ips[0], np.arange(len(x)), x_raw))
+            
+            # Physical width for the UI Table
+            lx_r = float(np.interp(l_ips[0], np.arange(len(x)), x_raw))
+            rx_r = float(np.interp(r_ips[0], np.arange(len(x)), x_raw))
+            width_hz = rx_r - lx_r
+            
+            # Visual Coordinates for the red/green graph markers
+            lx_v = float(np.interp(l_ips[0], np.arange(len(x)), x))
+            rx_v = float(np.interp(r_ips[0], np.arange(len(x)), x))
             left_x_vis.append(lx_v)
             right_x_vis.append(rx_v)
             width_heights.append(w_h[0])
+            peak_x_vis.append(float(x[p]))
+            peak_y_vis.append(peak_height)
             
-            lx_r = np.interp(l_ips[0], np.arange(len(x)), x_raw)
-            rx_r = np.interp(r_ips[0], np.arange(len(x)), x_raw)
-            width_real.append(rx_r - lx_r)
+            # Save accurately to memory
+            self.peak_data_memory.append({
+                "center_hz": center_hz,
+                "width_hz": width_hz,
+                "cut_left_hz": cut_left,
+                "cut_right_hz": cut_right,
+                "height": peak_height
+            })
             
-        _, _, base_left_ips, base_right_ips = sig.peak_widths(y, peaks, rel_height=0.98)
-        base_left_x_raw = np.interp(base_left_ips, np.arange(len(x)), x_raw)
-        base_right_x_raw = np.interp(base_right_ips, np.arange(len(x)), x_raw)
-
-        peak_x_vis = x[peaks]
-        peak_x_raw = x_raw[peaks]
-        peak_y = y[peaks]
-
-        self.table.setRowCount(len(peaks))
-        self.peak_data_memory.clear()
-        
-        known_noise = []
-        if self.fft_toggle_btn.isChecked():
-            try: known_noise = [float(val.strip()) for val in self.noise_flag_edit.text().split(",") if val.strip()]
-            except: pass
-
-        from PyQt5.QtWidgets import QTableWidgetItem
-        for i in range(len(peaks)):
-            freq = peak_x_raw[i] 
             tag = ""
             bg_color = None
             
             if self.fft_toggle_btn.isChecked():
-                if freq < 0.5: 
+                if center_hz < 0.5: 
                     tag = "Keep (DC Offset)"
                     bg_color = QColor("#e6f7ff") 
                 else:
                     for n in known_noise:
                         for harmonic in [1, 2, 3]:
                             target = n * harmonic
-                            if abs(freq - target) < 1.5: 
+                            if abs(center_hz - target) < 1.5: 
                                 suffix = "Harmonic" if harmonic > 1 else "Noise"
                                 tag = f"⚠️ {n}Hz {suffix}?"
                                 bg_color = QColor("#ffe6e6") 
@@ -547,9 +564,9 @@ class PeakFinderTool(QDialog):
                         if tag: break
 
             item_id = QTableWidgetItem(str(i + 1))
-            item_x = QTableWidgetItem(f"{peak_x_raw[i]:.6g}")
-            item_y = QTableWidgetItem(f"{peak_y[i]:.6g}")
-            item_width = QTableWidgetItem(f"{width_real[i]:.6g}")
+            item_x = QTableWidgetItem(f"{center_hz:.2f}")
+            item_y = QTableWidgetItem(f"{peak_height:.4f}")
+            item_width = QTableWidgetItem(f"{width_hz:.2f}")
             item_tag = QTableWidgetItem(tag)
             
             if bg_color:
@@ -562,26 +579,20 @@ class PeakFinderTool(QDialog):
             self.table.setItem(i, 3, item_width)
             self.table.setItem(i, 4, item_tag)
             
-            self.peak_data_memory.append({
-                "center_hz": peak_x_raw[i],
-                "cut_left_hz": base_left_x_raw[i],
-                "cut_right_hz": base_right_x_raw[i]
-            })
-            
-        self.parent_gui.draw_peak_markers(peak_x_vis, peak_y, left_x_vis, right_x_vis, width_heights, axis_side)
+        self.parent_gui.draw_peak_markers(peak_x_vis, peak_y_vis, left_x_vis, right_x_vis, width_heights, axis_side)
 
     def run_ifft_filter(self):
         selected_rows = list(set([item.row() for item in self.table.selectedItems()]))
         table_cuts = [self.peak_data_memory[r] for r in selected_rows]
         
-        # --- BULLETPROOF FIX: APPLY THE SAME UI-READING LOGIC HERE ---
+        # --- NEW SOURCE OF TRUTH: Read the math arrays, NOT the UI dots! ---
         manual_cuts = []
         if getattr(self.parent_gui, 'selected_indices', set()):
             try:
-                x_vis, _ = self.parent_gui.highlight_scatter.getData()
-                if x_vis is not None and len(x_vis) > 0:
-                    min_hz, max_hz = np.min(x_vis), np.max(x_vis)
-                    manual_cuts.append({"cut_left_hz": min_hz, "cut_right_hz": max_hz})
+                x_sel, _, _, _ = self.parent_gui._get_all_plotted_xy(apply_selection=True)
+                if x_sel is not None and len(x_sel) > 0:
+                    min_hz, max_hz = np.min(x_sel), np.max(x_sel)
+                    manual_cuts.append({"cut_left_hz": float(min_hz), "cut_right_hz": float(max_hz)})
             except Exception:
                 pass
                 
@@ -700,3 +711,9 @@ class PeakFinderTool(QDialog):
         self.selection_timer.stop()
         self.parent_gui.clear_peak_markers()
         super().closeEvent(event)
+        
+# --- NEW FUNCTION: Restart the timer when the window is reopened ---
+    def showEvent(self, event):
+        if hasattr(self, 'selection_timer') and not self.selection_timer.isActive():
+            self.selection_timer.start(200)
+        super().showEvent(event)
