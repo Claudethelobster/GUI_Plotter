@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTextEdit, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView,
     QFormLayout, QComboBox, QLineEdit, QWidget, QCheckBox, QTabWidget, QGroupBox,
-    QTableView, QScrollArea, QMessageBox
+    QTableView, QScrollArea, QMessageBox, QSpinBox
 )
 
 from core.constants import PHYSICS_CONSTANTS
@@ -303,12 +303,43 @@ class ManageColumnsDialog(QDialog):
         else:
             return "delete", self.delete_combo.currentData(), None
 
+class FolderEditChoiceDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Folder Modification Options")
+        self.setFixedSize(450, 180)
+        
+        layout = QVBoxLayout(self)
+        lbl = QLabel(
+            "<b>You are about to modify a Multi-CSV Folder dataset.</b><br><br>"
+            "To protect your original data, you must choose how to save this change:"
+        )
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
+        
+        self.btn_mirror = QPushButton("📂 Create a MIRROR_ Folder (Keep files separate)")
+        self.btn_mirror.setStyleSheet("font-weight: bold; padding: 8px;")
+        
+        self.btn_concat = QPushButton("📄 Concatenate into a Single CSV")
+        self.btn_concat.setStyleSheet("font-weight: bold; padding: 8px;")
+        
+        btn_cancel = QPushButton("Cancel")
+        
+        self.btn_mirror.clicked.connect(lambda: self.done(1))
+        self.btn_concat.clicked.connect(lambda: self.done(2))
+        btn_cancel.clicked.connect(self.reject)
+        
+        layout.addWidget(self.btn_mirror)
+        layout.addWidget(self.btn_concat)
+        layout.addWidget(btn_cancel)
 
 class MetadataDialog(QDialog):
     def __init__(self, dataset, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Dataset Metadata")
         self.resize(550, 600) 
+        self.dataset = dataset
+        self.parent_gui = parent
 
         layout = QVBoxLayout(self)
         
@@ -317,21 +348,61 @@ class MetadataDialog(QDialog):
             with open(dataset.filename, 'r', encoding='utf-8', errors='ignore') as f:
                 if re.search(r'Is\s+Mirror\s+File\s*:\s*Yes', f.read(2000), re.IGNORECASE):
                     is_mirror_str = "Yes"
-        except Exception:
-            pass
+        except Exception: pass
         
-        is_csv = type(dataset).__name__ == 'CSVDataset'
+        ds_type = type(dataset).__name__
         
-        if is_csv:
+        # ==========================================
+        # 1. MULTI-CSV FOLDER VIEW
+        # ==========================================
+        if ds_type == 'MultiCSVDataset':
+            folder_size_kb = sum(os.path.getsize(f) for f in dataset.file_list) / 1024
+            
+            general_group = QGroupBox("Folder Information")
+            general_layout = QFormLayout()
+            general_layout.setLabelAlignment(Qt.AlignRight)
+            
+            general_layout.addRow("<b>Folder Name:</b>", QLabel(os.path.basename(dataset.filename)))
+            general_layout.addRow("<b>Total CSV Files:</b>", QLabel(str(dataset.num_sweeps)))
+            general_layout.addRow("<b>Total Data Points:</b>", QLabel(str(dataset.num_points)))
+            general_layout.addRow("<b>Columns per file:</b>", QLabel(str(dataset.num_inputs)))
+            general_layout.addRow("<b>Total Size:</b>", QLabel(f"{folder_size_kb:.2f} KB"))
+            
+            path_label = QLineEdit(dataset.filename)
+            path_label.setReadOnly(True)
+            path_label.setStyleSheet("border: none; background: transparent;")
+            path_label.setCursorPosition(0)
+            general_layout.addRow("<b>Location:</b>", path_label)
+            
+            general_group.setLayout(general_layout)
+            layout.addWidget(general_group)
+            
+            inspect_group = QGroupBox("Inspect Specific Sweep / File")
+            inspect_layout = QHBoxLayout()
+            self.sweep_spin = QSpinBox()
+            self.sweep_spin.setRange(0, max(0, dataset.num_sweeps - 1))
+            inspect_layout.addWidget(QLabel("Sweep Number:"))
+            inspect_layout.addWidget(self.sweep_spin)
+            
+            inspect_btn = QPushButton("View File Metadata")
+            inspect_btn.clicked.connect(self.view_specific_file)
+            inspect_layout.addWidget(inspect_btn)
+            
+            inspect_group.setLayout(inspect_layout)
+            layout.addWidget(inspect_group)
+            layout.addStretch()
+
+        # ==========================================
+        # 2. STANDARD CSV VIEW
+        # ==========================================
+        elif ds_type == 'CSVDataset':
             try:
                 file_stat = os.stat(dataset.filename)
                 file_size_kb = file_stat.st_size / 1024
                 created_time = datetime.fromtimestamp(file_stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
                 modified_time = datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
             except Exception:
-                file_size_kb = 0
-                created_time = "Unknown"
-                modified_time = "Unknown"
+                file_size_kb = 0; created_time = "Unknown"; modified_time = "Unknown"
                 
             general_group = QGroupBox("File Information")
             general_layout = QFormLayout()
@@ -359,11 +430,16 @@ class MetadataDialog(QDialog):
             
             acq_layout.addRow("<b>Total Data Points:</b>", QLabel(str(dataset.num_points)))
             acq_layout.addRow("<b>Total Columns:</b>", QLabel(str(dataset.num_inputs)))
+            if dataset.num_sweeps > 1:
+                acq_layout.addRow("<b>Detected Sweeps:</b>", QLabel(str(dataset.num_sweeps)))
             
             acq_group.setLayout(acq_layout)
             layout.addWidget(acq_group)
             layout.addStretch()
             
+        # ==========================================
+        # 3. BADGERLOOP VIEW
+        # ==========================================
         else:
             version = "Unknown"
             settling_time = str(getattr(dataset, 'settling_time', 'Unknown'))
@@ -374,8 +450,7 @@ class MetadataDialog(QDialog):
                     header_content = f.read(2000)
                     v_match = re.search(r'version[\s:=]+([^\s\t\n]+)', header_content, re.IGNORECASE)
                     if v_match: version = v_match.group(1).strip()
-            except Exception:
-                pass
+            except Exception: pass
                 
             general_group = QGroupBox("General Information")
             general_layout = QFormLayout()
@@ -438,18 +513,18 @@ class MetadataDialog(QDialog):
                 dis_group.setLayout(dis_layout)
                 layout.addWidget(dis_group)
 
-            layout.addWidget(QLabel("<b>Notes:</b>"))
-            
-            raw_notes = str(getattr(dataset, 'notes', ''))
-            clean_notes = raw_notes.replace('\\n', '\n').replace('\t', '\n')
-            if '\n' not in clean_notes and ';' in clean_notes:
-                clean_notes = clean_notes.replace(';', ';\n')
-            clean_notes = '\n'.join([line.strip() for line in clean_notes.split('\n') if line.strip()])
-            
-            notes_edit = QTextEdit()
-            notes_edit.setPlainText(clean_notes)
-            notes_edit.setReadOnly(True)
-            layout.addWidget(notes_edit)
+        # NOTES SECTION (For all modes)
+        layout.addWidget(QLabel("<b>Notes:</b>"))
+        raw_notes = str(getattr(dataset, 'notes', ''))
+        clean_notes = raw_notes.replace('\\n', '\n').replace('\t', '\n')
+        if '\n' not in clean_notes and ';' in clean_notes:
+            clean_notes = clean_notes.replace(';', ';\n')
+        clean_notes = '\n'.join([line.strip() for line in clean_notes.split('\n') if line.strip()])
+        
+        notes_edit = QTextEdit()
+        notes_edit.setPlainText(clean_notes)
+        notes_edit.setReadOnly(True)
+        layout.addWidget(notes_edit)
 
         btn = QPushButton("Close")
         btn.setFixedWidth(100)
@@ -462,6 +537,19 @@ class MetadataDialog(QDialog):
             QTextEdit, QLineEdit { background-color: #fafafa; border: 1px solid #b0b0b0; border-radius: 4px; padding: 4px; }
             QLabel { color: #222222; }
         """)
+
+    def view_specific_file(self):
+        idx = self.sweep_spin.value()
+        filepath = self.dataset.file_list[idx]
+        
+        try:
+            from core.data_loader import CSVDataset
+            delim = getattr(self.parent_gui, 'last_load_opts', {}).get("delimiter", ",")
+            has_header = getattr(self.parent_gui, 'last_load_opts', {}).get("has_header", True)
+            single_ds = CSVDataset(filepath, delimiter=delim, has_header=has_header)
+            MetadataDialog(single_ds, self.parent_gui).exec()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to read file metadata:\n{e}")
 
 
 class ConstantsDialog(QDialog):
