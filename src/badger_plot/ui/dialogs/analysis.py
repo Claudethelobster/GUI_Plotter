@@ -84,6 +84,14 @@ class SignalProcessingDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         
         self.update_ui()
+        
+    def accept(self):
+        new_name = self.new_name_edit.text().strip()
+        existing_names = list(self.parent().dataset.column_names.values())
+        if new_name in existing_names:
+            QMessageBox.warning(self, "Duplicate Name", f"The column '{new_name}' already exists.\nPlease choose a unique name.")
+            return
+        super().accept()
 
     def update_ui(self):
         method = self.method_combo.currentText()
@@ -226,6 +234,14 @@ class PhaseSpaceDialog(QDialog):
 
         self.calc_btn.clicked.connect(self.accept)
         cancel_btn.clicked.connect(self.reject)
+
+    def accept(self):
+        new_name = self.new_name_edit.text().strip()
+        existing_names = list(self.dataset.column_names.values())
+        if new_name in existing_names:
+            QMessageBox.warning(self, "Duplicate Name", f"The column '{new_name}' already exists.\nPlease choose a unique name.")
+            return
+        super().accept()
 
     def update_name(self):
         x_name = self.state_combo.currentText().split(": ")[-1]
@@ -604,6 +620,12 @@ class PeakFinderTool(QDialog):
             
         new_name = self.ifft_name_edit.text().strip()
         if not new_name: return
+        # --- NEW UNIQUENESS CHECK ---
+        existing_names = list(self.parent_gui.dataset.column_names.values())
+        if new_name in existing_names:
+            QMessageBox.warning(self, "Duplicate Name", f"The column '{new_name}' already exists.\nPlease choose a unique name.")
+            return
+        # ----------------------------
 
         self.parent_gui.clear_peak_markers()
         if hasattr(self.parent_gui, 'clear_selection'):
