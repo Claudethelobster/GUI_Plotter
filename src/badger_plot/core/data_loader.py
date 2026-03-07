@@ -91,126 +91,174 @@ class TrackedFile:
     def __exit__(self, *args): self.file_obj.close()
 
 
-class CSVDataset:
-    def __init__(self, fname, delimiter='auto', has_header=True, progress_callback=None):
-        self.filename = fname
+class CSVSweep:
+    """ A simple data container to mimic the BadgerLoop sweep structure for CSVs. """
+    def __init__(self, data_array, name=""):
+        self.data = data_array
+        self.num_points = data_array.shape[0] if data_array.size else 0
+        self.name = name
+
+class MultiCSVDataset:
+    """ Loads a validated list of CSV files into a single multi-sweep object. """
+    def __init__(self, folder_path, file_list, delimiter=",", has_header=True):
+        self.filename = folder_path  # The folder acts as the 'file' for saving mirrors
+        self.file_list = file_list
         self.column_names = {}
-        self.num_sweeps = 1  
-        self.notes = ""
-        
-        file_size = os.path.getsize(fname)
-        notes_lines = []
-        clean_lines = []
-        
-        # 'utf-8-sig' automatically strips the invisible Byte Order Mark (BOM)
-        with open(fname, 'r', encoding='utf-8-sig', errors='ignore') as f:
-            if progress_callback:
-                f = TrackedFile(f, file_size, progress_callback, "Reading CSV")
-                
-            # Separate metadata hashtags from pure data rows
-            for line in f:
-                stripped = line.strip()
-                if not stripped: continue
-                
-                if stripped.startswith('#'):
-                    notes_lines.append(stripped.lstrip('#').strip())
-                else:
-                    clean_lines.append(line)
-                    
-        actual_delim = delimiter
-        if delimiter == 'auto' or not delimiter:
-            actual_delim = ',' # Default fallback
-            try:
-                sample = "".join(clean_lines[:20])
-                if sample.strip():
-                    sniffer = csv.Sniffer()
-                    actual_delim = sniffer.sniff(sample, delimiters=',\t; |').delimiter
-            except Exception:
-                pass
-                
-        try:
-            reader = csv.reader(clean_lines, delimiter=actual_delim)
-            rows = list(reader)
-        except Exception:
-            rows = []
-            
-        if not rows:
-            self.data = np.array([])
-            self.num_points = 0
-            self.num_inputs = 0
-            self.num_outputs = 0
-            return
-            
-        if has_header:
-            headers = rows[0]
-            data_rows = rows[1:]
-            for i, h in enumerate(headers):
-                self.column_names[i] = h.strip()
-        else:
-            data_rows = rows
-            for i in range(len(rows[0])):
-                self.column_names[i] = f"Column {i}"
-                
-        # Parse data into floats, replacing junk data with NaNs
-        clean_data = []
-        for row in data_rows:
-            clean_row = []
-            for val in row:
-                try: clean_row.append(float(val))
-                except ValueError: clean_row.append(np.nan)
-            clean_data.append(clean_row)
-            
-        self.data = np.array(clean_data)
-        self.num_points = len(self.data)
-        self.num_inputs = len(self.column_names)
+        self.sweeps = []
+        self.num_sweeps = 0
+        self.num_points = 0
+        self.num_inputs = 0
         self.num_outputs = 0
-        self.date = None
-        self.name = os.path.basename(fname)
-        self.notes = "\n".join(notes_lines) if notes_lines else ""
+        self.notes = f"# Loaded from folder: {os.path.basename(folder_path)}\n"
+        self._load_all(delimiter, has_header)
+
+    def _load_all(self, delimiter, has_header):
+        if delimiter == "auto": delimiter = ","
+
+        for i, filepath in enumerate(self.file_list):
+            with open(filepath, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                lines = f.readlines()
+            
+            headers_found = False
+            sweep_data = []
+            
+            for line in lines:
+                clean_line = line.strip()
+                if not clean_line or clean_line.startswith("#"): continue
+                
+                if has_header and not headers_found:
+                    if i == 0: # Only map columns from the first file
+                        row = next(csv.reader([clean_line], delimiter=delimiter))
+                        for col_idx, col_name in enumerate(row):
+                            self.column_names[col_idx] = col_name.strip()
+                        self.num_inputs = len(self.column_names)
+                    headers_found = True
+                    continue
+                    
+                row = next(csv.reader([clean_line], delimiter=delimiter))
+                num_row = []
+                for val in row:
+                    try: num_row.append(float(val))
+                    except ValueError: num_row.append(np.nan)
+                sweep_data.append(num_row)
+                
+            arr = np.array(sweep_data, dtype=np.float64)
+            self.sweeps.append(CSVSweep(arr, name=os.path.basename(filepath)))
+            self.num_points += arr.shape[0]
+            
+        self.num_sweeps = len(self.sweeps)
+        if self.num_sweeps > 0:
+            self.data = np.vstack([s.data for s in self.sweeps]) # Flat fallback for legacy operations
+        else:
+            self.data = np.array([])
+
+
+class CSVDataset:
+    """ Loads a standard CSV, but now natively detects '# --- Sweep' concatenation markers! """
+    def __init__(self, filename, delimiter=",", has_header=True):
+        self.filename = filename
+        self.column_names = {}
+        self.data = None
+        self.sweeps = []
+        self.num_sweeps = 0
+        self.num_points = 0
+        self.num_inputs = 0
+        self.num_outputs = 0
+        self.notes = ""
+        self._load_data(delimiter, has_header)
+
+    def _load_data(self, delimiter, has_header):
+        if delimiter == "auto": delimiter = ","
+        
+        with open(self.filename, 'r', encoding='utf-8-sig', errors='ignore') as f:
+            lines = f.readlines()
+            
+        headers = []
+        notes_lines = []
+        current_sweep_data = []
+        sweep_blocks = []
+        
+        for line in lines:
+            clean_line = line.strip()
+            if not clean_line: continue
+            
+            if clean_line.startswith("#"):
+                if "--- Sweep" in clean_line:
+                    if current_sweep_data:
+                        sweep_blocks.append(current_sweep_data)
+                        current_sweep_data = []
+                notes_lines.append(clean_line) # Keep all comments in notes
+                continue
+                
+            if has_header and not headers:
+                row = next(csv.reader([clean_line], delimiter=delimiter))
+                headers = [h.strip() for h in row]
+                continue
+                
+            row = next(csv.reader([clean_line], delimiter=delimiter))
+            num_row = []
+            for val in row:
+                try: num_row.append(float(val))
+                except ValueError: num_row.append(np.nan)
+            current_sweep_data.append(num_row)
+            
+        if current_sweep_data:
+            sweep_blocks.append(current_sweep_data)
+            
+        self.notes = "\n".join(notes_lines)
+        
+        if not headers and sweep_blocks and sweep_blocks[0]:
+            headers = [f"Column {i}" for i in range(len(sweep_blocks[0][0]))]
+            
+        for i, h in enumerate(headers):
+            self.column_names[i] = h
+            
+        self.num_inputs = len(headers)
+        
+        # Populate the sweeps list
+        for i, block in enumerate(sweep_blocks):
+            arr = np.array(block, dtype=np.float64)
+            self.sweeps.append(CSVSweep(arr, name=f"Sweep {i}"))
+            self.num_points += arr.shape[0]
+            
+        self.num_sweeps = len(self.sweeps)
+        
+        # Keep a flat version of the data for legacy operations
+        if self.num_sweeps > 0:
+            self.data = np.vstack([s.data for s in self.sweeps])
+        else:
+            self.data = np.array([])
 
 
 class DataLoaderThread(QThread):
+    progress = pyqtSignal(int, str)
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
-    progress = pyqtSignal(int, str)
 
-    def __init__(self, fname, opts):
+    def __init__(self, filename, opts):
         super().__init__()
-        self.fname = fname
+        self.filename = filename
         self.opts = opts
 
     def run(self):
         try:
-            file_size = os.path.getsize(self.fname)
-            original_open = builtins.open
+            self.progress.emit(10, "Initializing...")
             
-            # Monkey-patch Python's 'open' function to inject our TrackedFile safely
-            def hooked_open(name, *args, **kwargs):
-                f = original_open(name, *args, **kwargs)
-                try:
-                    if isinstance(name, (str, bytes)) and os.path.basename(self.fname) in str(name):
-                        return TrackedFile(f, file_size, self.progress.emit, "Reading BadgerLoop")
-                except Exception:
-                    pass
-                return f
-
-            builtins.open = hooked_open
-            try:
-                if self.opts["type"] == "CSV":
-                    # Bypass hook for CSVs, inject it directly inside CSVDataset for total safety
-                    builtins.open = original_open 
-                    dataset = CSVDataset(
-                        self.fname, 
-                        delimiter=self.opts["delimiter"], 
-                        has_header=self.opts["has_header"],
-                        progress_callback=self.progress.emit
-                    )
-                else:
-                    dataset = Dataset(self.fname)
-            finally:
-                builtins.open = original_open 
+            if self.opts["type"] == "CSV":
+                self.progress.emit(30, "Parsing CSV file and detecting sweeps...")
+                ds = CSVDataset(self.filename, self.opts["delimiter"], self.opts["has_header"])
                 
-            self.progress.emit(100, "File reading complete. Preparing...")
-            self.finished.emit(dataset)
+            elif self.opts["type"] == "MultiCSV":
+                self.progress.emit(30, "Stitching CSV files into memory...")
+                # We will pass the validated file list from the Main Window
+                ds = MultiCSVDataset(self.filename, self.opts["file_list"], self.opts["delimiter"], self.opts["has_header"])
+                
+            else:
+                self.progress.emit(30, "Parsing BadgerLoop binary...")
+                # Assuming your original Dataset class is still in the file
+                ds = Dataset(self.filename) 
+                
+            self.progress.emit(100, "Load complete.")
+            self.finished.emit(ds)
         except Exception as e:
-            self.error.emit(str(e) + "\n" + traceback.format_exc())
+            self.error.emit(str(e))
