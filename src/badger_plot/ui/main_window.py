@@ -37,6 +37,55 @@ try:
 except Exception:
     OPENGL_AVAILABLE = False
 
+class TemplateSelectionDialog(QDialog):
+    def __init__(self, signatures, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("EggPlot - Select Data Template")
+        self.setMinimumWidth(550)
+        layout = QVBoxLayout(self)
+        
+        layout.addWidget(QLabel("Multiple file formats were detected in this folder.\nSelect which group of files you want to load as sweeps:"))
+        
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget)
+        
+        self.sig_mapping = []
+        
+        sorted_sigs = sorted(signatures.items(), key=lambda x: len(x[1]), reverse=True)
+        
+        for i, (sig, files) in enumerate(sorted_sigs):
+            if isinstance(sig, tuple):
+                sig_str = ", ".join(sig)
+            else:
+                sig_str = f"{sig} columns (No Headers)"
+                
+            if len(sig_str) > 75: 
+                sig_str = sig_str[:72] + "..."
+                
+            item_text = f"Group {i+1}: {len(files)} files -> Headers: [{sig_str}]"
+            if i == 0: 
+                item_text += " ⭐ (Auto / Recommended)"
+                
+            self.list_widget.addItem(item_text)
+            self.sig_mapping.append(sig)
+            
+        self.list_widget.setCurrentRow(0)
+        
+        btn_box = QHBoxLayout()
+        ok_btn = QPushButton("Load Selected Group")
+        ok_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        ok_btn.clicked.connect(self.accept)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        
+        btn_box.addStretch()
+        btn_box.addWidget(ok_btn)
+        btn_box.addWidget(cancel_btn)
+        layout.addLayout(btn_box)
+        
+    def get_selected_signature(self):
+        return self.sig_mapping[self.list_widget.currentRow()]
 
 class BadgerLoopQtGraph(QMainWindow):
     def __init__(self):
@@ -103,7 +152,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
         self.zcol = None
     
-        self.setWindowTitle("BadgerLoop Data Plotter")
+        self.setWindowTitle("EggPlot Data Plotter")
         self.resize(1200, 800)
         self.errorbars_enabled = False
         self.file_type = "BadgerLoop"
@@ -168,39 +217,67 @@ class BadgerLoopQtGraph(QMainWindow):
         if self.dataset: self.plot()
             
     def update_file_mode_ui(self):
+        is_multi = self.file_type == "MultiCSV"
         is_bl = self.file_type == "BadgerLoop"
         is_csv = self.file_type == "CSV"
         
+        has_sweeps = is_bl or is_multi or (is_csv and getattr(self.dataset, 'num_sweeps', 0) > 1)
+        can_have_uncerts = is_csv or is_multi
+        
         self.show_metadata_btn.setVisible(True)
-        self.toggle_avg_btn.setVisible(is_bl)
-        self.sweeps_label.setVisible(is_bl)
-        self.sweeps_edit.setVisible(is_bl)
+        self.sweeps_label.setVisible(has_sweeps)
+        self.sweeps_edit.setVisible(has_sweeps)
         
         if hasattr(self, 'inspect_table_action'):
-            self.inspect_table_action.setText("Sweep table" if is_bl else "Inspect data table")
+            self.inspect_table_action.setText("Sweep table" if has_sweeps else "Inspect data table")
         
-        if is_csv:
+        if is_csv and not has_sweeps:
             self.errorbar_btn.setVisible(False)
             self.errorbar_sigma_edit.setVisible(False)
             self.average_enabled = False 
             self.errorbars_enabled = False
             
-        self.toggle_uncert_btn.setVisible(is_csv)
+        # --- MUTUAL EXCLUSIVITY LOGIC ---
+        avg_on = getattr(self, 'average_enabled', False)
+        uncerts_on = getattr(self, 'csv_uncerts_enabled', False)
+        
+        if avg_on:
+            self.toggle_avg_btn.setVisible(has_sweeps)
+            self.toggle_uncert_btn.setVisible(False)
+        elif uncerts_on:
+            self.toggle_avg_btn.setVisible(False)
+            self.toggle_uncert_btn.setVisible(can_have_uncerts)
+        else:
+            self.toggle_avg_btn.setVisible(has_sweeps)
+            self.toggle_uncert_btn.setVisible(can_have_uncerts)
+            
         self._update_uncert_visibility()
         
+        if hasattr(self, 'concat_folder_action'):
+            self.concat_folder_action.setEnabled(is_multi)
+        
     def toggle_csv_uncertainties(self):
-        self.csv_uncerts_enabled = not self.csv_uncerts_enabled
+        self.csv_uncerts_enabled = not getattr(self, 'csv_uncerts_enabled', False)
+        
+        # Update styling
+        if self.csv_uncerts_enabled:
+            self.toggle_uncert_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        else:
+            self.toggle_uncert_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+            
         self._update_uncert_visibility()
+        self.update_file_mode_ui()
         self.plot()
         
     def _update_uncert_visibility(self):
-        show = (self.file_type == "CSV" and self.csv_uncerts_enabled)
+        # Allow both standard CSVs and folders to show uncertainty boxes
+        show = (self.file_type in ["CSV", "MultiCSV"] and getattr(self, 'csv_uncerts_enabled', False))
         self.xuncert_label.setVisible(show)
         self.xuncert.setVisible(show)
         self.yuncert_label.setVisible(show)
         self.yuncert.setVisible(show)
         
-        show_z = show and (self.plot_mode != "2D")
+        show_z = show and (getattr(self, 'plot_mode', '2D') != "2D")
         self.zuncert_label.setVisible(show_z)
         self.zuncert.setVisible(show_z)
         
@@ -452,6 +529,13 @@ class BadgerLoopQtGraph(QMainWindow):
             self.phantom_curve.setVisible(False)
             config = dlg.get_result()
             
+            # --- NEW FOLDER INTERCEPT ---
+            if self.file_type == "MultiCSV":
+                def continue_sp(): self._create_processed_column(config, pair)
+                self._intercept_folder_edit(continue_sp)
+                return
+            # ----------------------------
+            
             fname = self.dataset.filename
             orig_name = os.path.basename(fname)
             directory = os.path.dirname(fname)
@@ -598,6 +682,13 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def open_phase_space_dialog(self):
         if not self.dataset: return
+        
+        # --- NEW FOLDER INTERCEPT ---
+        if self.file_type == "MultiCSV":
+            self._intercept_folder_edit(self._show_actual_phase_space_dialog)
+            return
+        # ----------------------------
+        
         fname = self.dataset.filename
         orig_name = os.path.basename(fname)
         directory = os.path.dirname(fname)
@@ -792,11 +883,24 @@ class BadgerLoopQtGraph(QMainWindow):
     def _build_menu(self):
         menubar = self.menuBar()
         
-        # File Menu
+        # --- NEW FILE MENU ---
         file_menu = menubar.addMenu("File")
-        open_action = QAction("Open Data File", self)
+        
+        open_action = QAction("Open File...", self)
         open_action.triggered.connect(self.open_file)
         file_menu.addAction(open_action)
+        
+        open_folder_action = QAction("Open Folder (Batch CSVs)...", self)
+        open_folder_action.triggered.connect(self.open_folder)
+        file_menu.addAction(open_folder_action)
+        
+        file_menu.addSeparator()
+        
+        self.concat_folder_action = QAction("Concatenate Loaded Folder into Single CSV...", self)
+        self.concat_folder_action.triggered.connect(self.concatenate_folder)
+        self.concat_folder_action.setEnabled(False) # Disabled by default
+        file_menu.addAction(self.concat_folder_action)
+        # ---------------------
     
         # Inspect Menu
         inspect_menu = menubar.addMenu("Inspect")
@@ -933,6 +1037,13 @@ class BadgerLoopQtGraph(QMainWindow):
         
     def manage_columns_dialog(self):
         if not self.dataset: return
+        
+        # --- NEW FOLDER INTERCEPT ---
+        if self.file_type == "MultiCSV":
+            self._intercept_folder_edit(self._show_actual_manage_columns_dialog)
+            return
+        # ----------------------------
+            
         fname = self.dataset.filename
         orig_name = os.path.basename(fname)
         directory = os.path.dirname(fname)
@@ -1049,6 +1160,13 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def prompt_create_column(self):
         if not self.dataset: return
+        
+        # --- NEW FOLDER INTERCEPT ---
+        if self.file_type == "MultiCSV":
+            self._intercept_folder_edit(self._show_actual_create_column_dialog)
+            return
+        # ----------------------------
+        
         fname = self.dataset.filename
         orig_name = os.path.basename(fname)
         directory = os.path.dirname(fname)
@@ -1121,6 +1239,79 @@ class BadgerLoopQtGraph(QMainWindow):
             return
 
         self._show_actual_create_column_dialog()
+        
+    def _intercept_folder_edit(self, continue_callback):
+        """ Checks if a folder is loaded and prompts the user for safety preferences. """
+        orig_name = os.path.basename(self.dataset.filename)
+        if orig_name.startswith("MIRROR_"):
+            continue_callback()
+            return
+            
+        from ui.dialogs.data_mgmt import FolderEditChoiceDialog
+        choice = FolderEditChoiceDialog(self).exec()
+        if choice == 0: return 
+        
+        if choice == 2:
+            self.concatenate_folder()
+            QMessageBox.information(self, "Concatenation Complete", "The folder has been stitched into a single file.\n\nPlease re-open the tool to apply your modifications.")
+            return
+            
+        if choice == 1:
+            self._create_mirror_folder(continue_callback)
+
+    def _create_mirror_folder(self, callback):
+        orig_folder = self.dataset.filename
+        parent_dir = os.path.dirname(orig_folder)
+        folder_name = os.path.basename(orig_folder)
+        
+        mirror_folder_name = f"MIRROR_{folder_name}"
+        mirror_folder_path = os.path.join(parent_dir, mirror_folder_name)
+        
+        counter = 1
+        while os.path.exists(mirror_folder_path):
+            mirror_folder_name = f"MIRROR_{folder_name} ({counter})"
+            mirror_folder_path = os.path.join(parent_dir, mirror_folder_name)
+            counter += 1
+            
+        try:
+            os.makedirs(mirror_folder_path)
+            new_file_list = []
+            for fpath in self.dataset.file_list:
+                fname = os.path.basename(fpath)
+                new_fpath = os.path.join(mirror_folder_path, f"MIRROR_{fname}")
+                self._write_csv_mirror_from_existing(fpath, new_fpath)
+                new_file_list.append(new_fpath)
+                
+            opts = getattr(self, 'last_load_opts', {"type": "MultiCSV", "delimiter": ",", "has_header": True})
+            opts["file_list"] = new_file_list
+            
+            self.progress_dialog = QProgressDialog("Building Mirror Folder...", "Cancel", 0, 100, self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setCancelButton(None)
+            self.progress_dialog.show()
+            QApplication.processEvents()
+            
+            def on_mirror_loaded(ds):
+                self._on_load_finished(ds, mirror_folder_path, opts)
+                callback() # Automatically continue to the math tool!
+                
+            self.loader_thread = DataLoaderThread(mirror_folder_path, opts)
+            self.loader_thread.progress.connect(self._update_progress_ui)
+            self.loader_thread.finished.connect(on_mirror_loaded)
+            self.loader_thread.error.connect(self._on_load_error)
+            self.loader_thread.start()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create mirror folder:\n{e}")
+
+    def _write_csv_mirror_from_existing(self, src, dest):
+        with open(src, 'r', encoding='utf-8-sig', errors='ignore') as f:
+            lines = f.readlines()
+        import re
+        has_flag = any(re.search(r'(?i)Is\s+Mirror\s+File\s*:\s*Yes', l) for l in lines[:15])
+        with open(dest, 'w', encoding='utf-8-sig', newline='') as f:
+            if not has_flag: f.write("# Is Mirror File: Yes\n")
+            f.writelines(lines)
         
     def _write_csv_mirror(self, filepath):
         import csv
@@ -1231,7 +1422,42 @@ class BadgerLoopQtGraph(QMainWindow):
             QMessageBox.critical(self, "Fatal Execution Error", f"The math engine or file writer encountered a critical error:\n\n{e}\n\nTraceback:\n{traceback.format_exc()}")
 
     def _append_column_to_file(self, target_file, new_name, calculated_blocks):
-        if self.file_type == "CSV":
+        if self.file_type == "MultiCSV":
+            delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
+            if delim == "auto": delim = ","
+            
+            for sw_idx, filepath in enumerate(self.dataset.file_list):
+                with open(filepath, "r", encoding='utf-8-sig', errors='ignore') as f:
+                    lines = f.readlines()
+                    
+                out = []
+                data_row_idx = 0
+                flat_calc = calculated_blocks[sw_idx]
+                
+                import re
+                has_mirror_flag = any(re.search(r'(?i)Is\s+Mirror\s+File\s*:\s*Yes', l) for l in lines[:15])
+                if not has_mirror_flag:
+                    out.append("# Is Mirror File: Yes\n")
+                    
+                header_done = False
+                for line in lines:
+                    clean_line = line.rstrip('\r\n') 
+                    if not clean_line or clean_line.startswith('#'): 
+                        out.append(line)
+                        continue
+                        
+                    if not header_done: 
+                        out.append(f"{clean_line}{delim}{new_name}\n")
+                        header_done = True
+                    else: 
+                        val = flat_calc[data_row_idx] if data_row_idx < len(flat_calc) else np.nan 
+                        data_row_idx += 1
+                        out.append(f"{clean_line}{delim}{val:.6g}\n")
+                        
+                with open(filepath, "w", encoding='utf-8-sig') as f:
+                    f.writelines(out)
+                    
+        elif self.file_type == "CSV":
             delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
             if delim == "auto": delim = ","
             
@@ -1365,7 +1591,41 @@ class BadgerLoopQtGraph(QMainWindow):
                 f.writelines(out)
 
     def _rewrite_column_name_in_file(self, target_file, col_idx, new_name):
-        if self.file_type == "CSV":
+        if self.file_type == "MultiCSV":
+            delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
+            if delim == "auto": delim = ","
+            import csv, io, re
+            
+            for filepath in self.dataset.file_list:
+                with open(filepath, "r", encoding='utf-8-sig', errors='ignore') as f:
+                    lines = [l.rstrip('\r\n') for l in f.readlines()]
+                if not lines: continue
+                
+                has_mirror_flag = any(re.search(r'(?i)Is\s+Mirror\s+File\s*:\s*Yes', l) for l in lines[:15])
+                if not has_mirror_flag:
+                    lines.insert(0, "# Is Mirror File: Yes")
+                    
+                header_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip() and not line.strip().startswith('#'):
+                        header_idx = i
+                        break
+                        
+                reader = csv.reader([lines[header_idx]], delimiter=delim)
+                try: headers = next(reader)
+                except StopIteration: continue
+                    
+                if col_idx < len(headers):
+                    headers[col_idx] = new_name
+                    
+                out_buf = io.StringIO()
+                csv.writer(out_buf, delimiter=delim).writerow(headers)
+                lines[header_idx] = out_buf.getvalue().strip()
+                
+                with open(filepath, "w", encoding='utf-8') as f:
+                    f.write("\n".join(lines) + "\n")
+                    
+        elif self.file_type == "CSV":
             delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
             if delim == "auto": delim = ","
             
@@ -1456,7 +1716,38 @@ class BadgerLoopQtGraph(QMainWindow):
                 f.write("\n".join(out) + "\n")
 
     def _delete_column_in_file(self, target_file, col_idx):
-        if self.file_type == "CSV":
+        if self.file_type == "MultiCSV":
+            delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
+            if delim == "auto": delim = ","
+            import csv, io, re
+            
+            for filepath in self.dataset.file_list:
+                with open(filepath, "r", encoding='utf-8-sig', errors='ignore') as f:
+                    lines = [l.rstrip('\r\n') for l in f.readlines()]
+                if not lines: continue
+
+                out = []
+                has_mirror_flag = any(re.search(r'(?i)Is\s+Mirror\s+File\s*:\s*Yes', l) for l in lines[:15])
+                if not has_mirror_flag:
+                    out.append("# Is Mirror File: Yes")
+
+                for line in lines:
+                    if line.startswith('#') or not line.strip():
+                        out.append(line)
+                        continue
+                    
+                    parts = next(csv.reader([line], delimiter=delim))
+                    if col_idx < len(parts):
+                        parts.pop(col_idx)
+                    
+                    temp = io.StringIO()
+                    csv.writer(temp, delimiter=delim).writerow(parts)
+                    out.append(temp.getvalue().strip())
+                    
+                with open(filepath, "w", encoding='utf-8-sig') as f:
+                    f.write("\n".join(out) + "\n")
+                    
+        elif self.file_type == "CSV":
             delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
             if delim == "auto": delim = ","
             
@@ -2290,8 +2581,7 @@ class BadgerLoopQtGraph(QMainWindow):
             b = QPushButton(text)
             b.clicked.connect(slot)
             return b
-            
-        controls.addWidget(button("Open Data File", self.open_file))           
+                     
         self.show_metadata_btn = button("Show Metadata", self.show_metadata)
         controls.addWidget(self.show_metadata_btn)
         
@@ -2792,11 +3082,19 @@ class BadgerLoopQtGraph(QMainWindow):
         self.zbase.setVisible(is_log and is_3d_or_heat)
     
     def toggle_averaging(self):
-        self.average_enabled = not self.average_enabled
+        self.average_enabled = not getattr(self, 'average_enabled', False)
         self.errorbar_btn.setVisible(self.average_enabled)
         self.errorbar_sigma_edit.setVisible(self.average_enabled)
         if not self.average_enabled:
             self.errorbars_enabled = False
+            
+        # Update styling
+        if self.average_enabled:
+            self.toggle_avg_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        else:
+            self.toggle_avg_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+        
+        self.update_file_mode_ui()
         self.plot()
         
     def toggle_errorbars(self):
@@ -2980,8 +3278,33 @@ class BadgerLoopQtGraph(QMainWindow):
     
         if self.last_file and os.path.exists(self.last_file):
             try:
-                if self.file_type == "CSV": self.dataset = CSVDataset(self.last_file)
-                else: self.dataset = Dataset(self.last_file)
+                # Retrieve saved load options
+                opts_str = self.settings.value("last_load_opts", "")
+                try: self.last_load_opts = json.loads(opts_str) if opts_str else {}
+                except Exception: self.last_load_opts = {}
+
+                if self.file_type == "MultiCSV":
+                    if "file_list" not in self.last_load_opts:
+                        raise ValueError("Missing file list for MultiCSV")
+                    from core.data_loader import MultiCSVDataset
+                    self.dataset = MultiCSVDataset(
+                        self.last_file, 
+                        self.last_load_opts["file_list"], 
+                        self.last_load_opts.get("delimiter", ","), 
+                        self.last_load_opts.get("has_header", True)
+                    )
+                elif self.file_type == "CSV": 
+                    from core.data_loader import CSVDataset
+                    self.dataset = CSVDataset(
+                        self.last_file,
+                        self.last_load_opts.get("delimiter", ","),
+                        self.last_load_opts.get("has_header", True)
+                    )
+                else: 
+                    if os.path.isdir(self.last_file):
+                        raise IsADirectoryError("Expected a BadgerLoop file but got a directory.")
+                    self.dataset = Dataset(self.last_file)
+                    
                 self.populate_columns()
                 
                 saved_series_str = self.settings.value("series_data", "")
@@ -3048,6 +3371,11 @@ class BadgerLoopQtGraph(QMainWindow):
         self.settings.setValue("legend", self.legend_visible)
         self.settings.setValue("last_file", self.last_file)
         self.settings.setValue("file_type", self.file_type)
+        # --- NEW: Save the load options (delimiter, file list, etc) ---
+        if hasattr(self, 'last_load_opts'):
+            try: self.settings.setValue("last_load_opts", json.dumps(self.last_load_opts))
+            except Exception: pass
+        # -------------------------------------------------------------
         self.settings.setValue("xscale", self.xscale.currentText())
         self.settings.setValue("yscale", self.yscale.currentText())
         self.settings.setValue("zscale", self.zscale.currentText()) 
@@ -3176,6 +3504,159 @@ class BadgerLoopQtGraph(QMainWindow):
             self.loader_thread.finished.connect(lambda ds: self._on_load_finished(ds, fname, opts))
             self.loader_thread.error.connect(self._on_load_error)
             self.loader_thread.start()
+            
+    def open_folder(self):
+        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder with CSVs")
+        if not folder_path: return
+
+        all_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.csv')]
+        if not all_files:
+            QMessageBox.warning(self, "No CSVs Found", "No CSV files were found in the selected folder.")
+            return
+        all_files.sort()
+
+        dlg = FileImportDialog(self)
+        dlg.file_type.setCurrentText("CSV")
+        dlg.file_type.setEnabled(False) 
+        
+        if dlg.exec() != QDialog.Accepted: return
+        opts = dlg.get_options()
+        
+        import csv
+        delim = opts["delimiter"]
+        if delim == "auto": delim = "," 
+        
+        signatures = {}
+        errors = []
+        
+        self.progress_dialog = QProgressDialog("Scanning folder signatures...", "Cancel", 0, len(all_files), self)
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.show()
+        
+        # --- PHASE 1: SCAN ALL FILES ---
+        for i, fname in enumerate(all_files):
+            if self.progress_dialog.wasCanceled(): return
+            self.progress_dialog.setValue(i)
+            
+            full_path = os.path.join(folder_path, fname)
+            try:
+                with open(full_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                    first_line = ""
+                    for line in f:
+                        if line.strip() and not line.strip().startswith('#'):
+                            first_line = line.strip()
+                            break
+                    
+                    if not first_line:
+                        errors.append((fname, "Empty or comments only"))
+                        continue
+                        
+                    row = next(csv.reader([first_line], delimiter=delim))
+                    sig = tuple(row) if opts["has_header"] else len(row)
+                    
+                    if sig not in signatures:
+                        signatures[sig] = []
+                    signatures[sig].append(full_path)
+            except Exception as e:
+                errors.append((fname, str(e)))
+
+        self.progress_dialog.setValue(len(all_files))
+        
+        if not signatures:
+            QMessageBox.critical(self, "Validation Failed", "No valid data found in the CSV files.")
+            return
+
+        # --- PHASE 2: TEMPLATE SELECTION ---
+        target_sig = None
+        if len(signatures) == 1:
+            target_sig = list(signatures.keys())[0] 
+        else:
+            sel_dlg = TemplateSelectionDialog(signatures, self)
+            if sel_dlg.exec() != QDialog.Accepted: return
+            target_sig = sel_dlg.get_selected_signature()
+            
+        valid_files = signatures[target_sig]
+        rejected_count = len(all_files) - len(valid_files)
+        
+        if rejected_count > 0:
+            msg = f"Loaded {len(valid_files)} files matching the selected template.\nIgnored {rejected_count} mismatched files.\n\n"
+            if errors:
+                msg += "Some files had read errors:\n"
+                for r in errors[:5]: msg += f"- {r[0]}: {r[1]}\n"
+                if len(errors) > 5: msg += "..."
+            QMessageBox.information(self, "Validation Summary", msg)
+
+        # --- PHASE 3: FIRE UP MULTI-LOADER ---
+        opts["type"] = "MultiCSV"
+        opts["file_list"] = valid_files
+        
+        self.progress_dialog.setLabelText("Stitching files in memory...")
+        self.progress_dialog.setValue(0)
+        
+        self.loader_thread = DataLoaderThread(folder_path, opts)
+        self.loader_thread.progress.connect(self._update_progress_ui)
+        self.loader_thread.finished.connect(lambda ds: self._on_load_finished(ds, folder_path, opts))
+        self.loader_thread.error.connect(self._on_load_error)
+        self.loader_thread.start()
+
+    def concatenate_folder(self):
+        if self.file_type != "MultiCSV" or not self.dataset: return
+        
+        save_path, _ = QFileDialog.getSaveFileName(self, "Save Concatenated CSV", os.path.dirname(self.dataset.filename), "CSV files (*.csv)")
+        if not save_path: return
+        if not save_path.lower().endswith('.csv'): save_path += '.csv'
+        
+        delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
+        if delim == "auto": delim = ","
+        
+        try:
+            self.progress_dialog = QProgressDialog("Concatenating files...", "Cancel", 0, len(self.dataset.file_list), self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.show()
+            
+            with open(save_path, 'w', encoding='utf-8-sig', newline='') as out_f:
+                # Write Master Metadata
+                out_f.write("# Is Mirror File: Yes\n")
+                out_f.write(f"# Concatenated from folder: {os.path.basename(self.dataset.filename)}\n")
+                
+                header_line = delim.join([self.dataset.column_names[i] for i in range(self.dataset.num_inputs)])
+                out_f.write(header_line + "\n")
+                
+                for i, filepath in enumerate(self.dataset.file_list):
+                    if self.progress_dialog.wasCanceled():
+                        out_f.close()
+                        os.remove(save_path)
+                        return
+                    self.progress_dialog.setValue(i)
+                    
+                    # INJECT THE SWEEP MARKER
+                    out_f.write(f"# --- Sweep {i} (File: {os.path.basename(filepath)}) ---\n")
+                    
+                    with open(filepath, 'r', encoding='utf-8-sig', errors='ignore') as in_f:
+                        lines = in_f.readlines()
+                        
+                    header_skipped = not getattr(self, 'last_load_opts', {}).get("has_header", True) 
+                    
+                    for line in lines:
+                        clean_line = line.strip()
+                        if not clean_line or clean_line.startswith("#"): continue
+                        if not header_skipped:
+                            header_skipped = True
+                            continue
+                        out_f.write(clean_line + "\n")
+            
+            self.progress_dialog.setValue(len(self.dataset.file_list))
+            
+            # Instantly load the brand-new concatenated file!
+            opts = {"type": "CSV", "delimiter": delim, "has_header": True}
+            self.loader_thread = DataLoaderThread(save_path, opts)
+            self.loader_thread.progress.connect(self._update_progress_ui)
+            self.loader_thread.finished.connect(lambda ds: self._on_load_finished(ds, save_path, opts))
+            self.loader_thread.error.connect(self._on_load_error)
+            self.loader_thread.start()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Concatenation Error", f"Failed to concatenate files:\n{e}")
 
     def _update_progress_ui(self, percent, text):
         if hasattr(self, 'progress_dialog') and self.progress_dialog is not None:
@@ -3452,8 +3933,8 @@ class BadgerLoopQtGraph(QMainWindow):
             "xbase": self._parse_log_base(self.xbase.text()),
             "ybase": self._parse_log_base(self.ybase.text()),
             "zbase": self._parse_log_base(self.zbase.text()) if getattr(self, 'zbase', None) else 10.0,
-            "average_enabled": getattr(self, 'average_enabled', False) if self.file_type == "BadgerLoop" else False,
-            "errorbars_enabled": getattr(self, 'errorbars_enabled', False) if self.file_type == "BadgerLoop" else False,
+            "average_enabled": getattr(self, 'average_enabled', False) if getattr(self.dataset, 'num_sweeps', 0) > 1 else False,
+            "errorbars_enabled": getattr(self, 'errorbars_enabled', False) if getattr(self.dataset, 'num_sweeps', 0) > 1 else False,
             "nsigma": float(self.errorbar_sigma_edit.text()) if self.errorbar_sigma_edit.text().replace('.','',1).isdigit() else 1.0,
             "csv_uncerts_enabled": getattr(self, 'csv_uncerts_enabled', False),
             "file_type": self.file_type, 
