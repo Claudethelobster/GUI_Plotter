@@ -15,21 +15,21 @@ from PyQt5.QtWidgets import (
 )
 
 # Core imports
-from badger_plot.core.data_loader import DataLoaderThread, CSVDataset, Dataset, BADGERLOOP_AVAILABLE
-from badger_plot.core.plot_worker import PlotWorkerThread
-from badger_plot.core.constants import PHYSICS_CONSTANTS, GREEK_MAP
+from core.data_loader import DataLoaderThread, CSVDataset, Dataset, BADGERLOOP_AVAILABLE
+from core.plot_worker import PlotWorkerThread
+from core.constants import PHYSICS_CONSTANTS, GREEK_MAP
 
 # UI Component imports
-from badger_plot.ui.custom_widgets import CustomAxisItem, DraggableLabel
-from badger_plot.ui.dialogs.data_mgmt import (
+from ui.custom_widgets import CustomAxisItem, DraggableLabel
+from ui.dialogs.data_mgmt import (
     FileImportDialog, SweepTableDialog, ManageColumnsDialog, 
     MetadataDialog, CreateColumnDialog, CopyableErrorDialog
 )
-from badger_plot.ui.dialogs.analysis import SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool
-from badger_plot.ui.dialogs.fitting import (
+from ui.dialogs.analysis import SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool
+from ui.dialogs.fitting import (
     FitFunctionDialog, CustomFitDialog, MultiFitManagerDialog, FitDataToFunctionWindow
 )
-from badger_plot.ui.dialogs.help import HelpDialog
+from ui.dialogs.help import HelpDialog
 
 try:
     import pyqtgraph.opengl as gl
@@ -3751,7 +3751,31 @@ class BadgerLoopQtGraph(QMainWindow):
             self._apply_axis_fonts()
             self.plot_widget.getViewBox().autoRange()
             self.vb_right.autoRange()
+
+            # =========================================================================
+            # NEW FIX: ALWAYS RESTORE SELECTION TOOLS TO THE TOP LAYER AFTER REDRAWING
+            # =========================================================================
+            try:
+                self.plot_widget.removeItem(self.selection_curve)
+                self.plot_widget.removeItem(self.highlight_scatter)
+            except: pass
             
+            self.plot_widget.addItem(self.selection_curve, ignoreBounds=True)
+            self.plot_widget.addItem(self.highlight_scatter)
+            self.selection_curve.setZValue(1000)
+            self.highlight_scatter.setZValue(1001)
+            
+            # If there was a pre-existing selection, keep it highlighted!
+            if getattr(self, 'selected_indices', set()):
+                x_vis, y_vis, _, _ = self._get_all_plotted_xy(apply_selection=False)
+                idx_array = [i for i in list(self.selected_indices) if i < len(x_vis)]
+                if idx_array:
+                    self.highlight_scatter.setData(x_vis[idx_array], y_vis[idx_array])
+                    self.highlight_scatter.show()
+                else:
+                    self.clear_selection()
+            # =========================================================================
+
         except Exception as e:
             import traceback
             from PyQt5.QtWidgets import QMessageBox
