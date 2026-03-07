@@ -12,8 +12,8 @@ from PyQt5.QtWidgets import (
     QTableView, QScrollArea, QMessageBox
 )
 
-from badger_plot.core.constants import PHYSICS_CONSTANTS
-from badger_plot.core.data_loader import BADGERLOOP_AVAILABLE
+from core.constants import PHYSICS_CONSTANTS
+from core.data_loader import BADGERLOOP_AVAILABLE
 
 class CopyableErrorDialog(QDialog):
     def __init__(self, title, header, details, parent=None):
@@ -276,6 +276,26 @@ class ManageColumnsDialog(QDialog):
     def _update_current_name(self):
         idx = self.rename_combo.currentData()
         self.current_name.setText(self.dataset.column_names.get(idx, ""))
+        
+    def accept(self):
+        # We only care about uniqueness if they are trying to Rename a column
+        if self.tabs.currentIndex() == 0: 
+            idx = self.rename_combo.currentData()
+            old_name = self.dataset.column_names.get(idx, "")
+            new_name = self.new_name_edit.text().strip()
+            
+            # If they didn't change the name, just close the dialog silently
+            if new_name == old_name:
+                super().reject() # Reject skips the file-writing logic entirely
+                return
+                
+            # If they picked a new name, check if it already exists somewhere else
+            existing_names = list(self.dataset.column_names.values())
+            if new_name in existing_names:
+                QMessageBox.warning(self, "Duplicate Name", f"The column '{new_name}' already exists.\nPlease choose a unique name.")
+                return
+                
+        super().accept()
 
     def get_result(self):
         if self.tabs.currentIndex() == 0:
@@ -608,6 +628,13 @@ class CreateColumnDialog(QDialog):
         if not getattr(self, 'is_valid', False):
             QMessageBox.warning(self, "Invalid Equation", "Please enter a valid mathematical equation.")
             return
+        # --- NEW UNIQUENESS CHECK ---
+        new_name = self.col_name_edit.text().strip()
+        existing_names = list(self.dataset.column_names.values())
+        if new_name in existing_names:
+            QMessageBox.warning(self, "Duplicate Name", f"The column '{new_name}' already exists.\nPlease choose a unique name.")
+            return
+        # ----------------------------
         self.accept()
 
     def validate_equation(self, raw_text):
