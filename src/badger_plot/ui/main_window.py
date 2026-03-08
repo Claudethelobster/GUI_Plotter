@@ -218,11 +218,12 @@ class BadgerLoopQtGraph(QMainWindow):
             
     def update_file_mode_ui(self):
         is_multi = self.file_type == "MultiCSV"
+        is_concat = self.file_type == "ConcatenatedCSV"
         is_bl = self.file_type == "BadgerLoop"
         is_csv = self.file_type == "CSV"
         
-        has_sweeps = is_bl or is_multi or (is_csv and getattr(self.dataset, 'num_sweeps', 0) > 1)
-        can_have_uncerts = is_csv or is_multi
+        has_sweeps = is_bl or is_multi or is_concat or (is_csv and getattr(self.dataset, 'num_sweeps', 0) > 1)
+        can_have_uncerts = is_csv or is_multi or is_concat
         
         self.show_metadata_btn.setVisible(True)
         self.sweeps_label.setVisible(has_sweeps)
@@ -237,7 +238,6 @@ class BadgerLoopQtGraph(QMainWindow):
             self.average_enabled = False 
             self.errorbars_enabled = False
             
-        # --- MUTUAL EXCLUSIVITY LOGIC ---
         avg_on = getattr(self, 'average_enabled', False)
         uncerts_on = getattr(self, 'csv_uncerts_enabled', False)
         
@@ -271,7 +271,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
     def _update_uncert_visibility(self):
         # Allow both standard CSVs and folders to show uncertainty boxes
-        show = (self.file_type in ["CSV", "MultiCSV"] and getattr(self, 'csv_uncerts_enabled', False))
+        show = (self.file_type in ["CSV", "MultiCSV", "ConcatenatedCSV"] and getattr(self, 'csv_uncerts_enabled', False))
         self.xuncert_label.setVisible(show)
         self.xuncert.setVisible(show)
         self.yuncert_label.setVisible(show)
@@ -540,7 +540,7 @@ class BadgerLoopQtGraph(QMainWindow):
             orig_name = os.path.basename(fname)
             directory = os.path.dirname(fname)
 
-            if not orig_name.startswith("MIRROR_"):
+            if not orig_name.startswith("MIRROR_") and self.file_type != "ConcatenatedCSV":
                 name_only, ext = os.path.splitext(orig_name)
                 import glob
                 search_pattern = os.path.join(directory, f"MIRROR_{name_only}*{ext}")
@@ -693,7 +693,7 @@ class BadgerLoopQtGraph(QMainWindow):
         orig_name = os.path.basename(fname)
         directory = os.path.dirname(fname)
 
-        if not orig_name.startswith("MIRROR_"):
+        if not orig_name.startswith("MIRROR_") and self.file_type != "ConcatenatedCSV":
             name_only, ext = os.path.splitext(orig_name)
             import glob
             search_pattern = os.path.join(directory, f"MIRROR_{name_only}*{ext}")
@@ -840,6 +840,92 @@ class BadgerLoopQtGraph(QMainWindow):
     def open_peak_finder(self):
         if not self.dataset: return
         
+        # --- NEW FOLDER INTERCEPT ---
+        if self.file_type == "MultiCSV":
+            self._intercept_folder_edit(self._show_actual_peak_finder)
+            return
+        # ----------------------------
+        
+        fname = self.dataset.filename
+        orig_name = os.path.basename(fname)
+        directory = os.path.dirname(fname)
+
+        if not orig_name.startswith("MIRROR_") and self.file_type != "ConcatenatedCSV":
+            name_only, ext = os.path.splitext(orig_name)
+            import glob
+            search_pattern = os.path.join(directory, f"MIRROR_{name_only}*{ext}")
+            existing_mirrors = [os.path.basename(p) for p in glob.glob(search_pattern)]
+
+            if not existing_mirrors:
+                target_file = os.path.join(directory, f"MIRROR_{orig_name}")
+                try: 
+                    if self.file_type in ["CSV", "ConcatenatedCSV"]:
+                        self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to create mirror:\n{e}")
+                    return
+                QMessageBox.information(self, "Mirror Created", "To protect original data, a Mirror file has been created and loaded.")
+            else:
+                dlg = QDialog(self)
+                dlg.setWindowTitle("Mirror File Exists")
+                dlg.setFixedSize(450, 150)
+                l = QVBoxLayout(dlg)
+                l.addWidget(QLabel("Select an existing mirror to load, or create a new one:"))
+                combo = QComboBox()
+                combo.addItem("--- Create New Mirror ---")
+                combo.addItems(existing_mirrors)
+                l.addWidget(combo)
+                
+                btn_box = QHBoxLayout()
+                ok, cancel = QPushButton("OK"), QPushButton("Cancel")
+                btn_box.addWidget(ok); btn_box.addWidget(cancel)
+                l.addLayout(btn_box)
+                
+                ok.clicked.connect(dlg.accept); cancel.clicked.connect(dlg.reject)
+                if dlg.exec() != QDialog.Accepted: return
+                
+                choice = combo.currentText()
+                if choice == "--- Create New Mirror ---":
+                    import re
+                    max_num = max([int(m.group(1)) for m in [re.search(r'\((\d+)\)', x) for x in existing_mirrors] if m] + [1 if f"MIRROR_{orig_name}" in existing_mirrors else 0])
+                    new_mirror_name = f"MIRROR_{name_only} ({max_num + 1}){ext}"
+                    target_file = os.path.join(directory, new_mirror_name)
+                    
+                    if self.file_type in ["CSV", "ConcatenatedCSV"]:
+                        self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                else:
+                    target_file = os.path.join(directory, choice)
+
+            opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+            if self.file_type == "CSV": opts["delimiter"] = ","
+                
+            self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setCancelButton(None) 
+            self.progress_dialog.setMinimumDuration(0) 
+            self.progress_dialog.show()
+
+            def on_mirror_loaded(dataset):
+                self._on_load_finished(dataset, target_file, opts)
+                self._show_actual_peak_finder() 
+
+            self.loader_thread = DataLoaderThread(target_file, opts)
+            self.loader_thread.progress.connect(self._update_progress_ui)
+            self.loader_thread.finished.connect(on_mirror_loaded)
+            self.loader_thread.error.connect(self._on_load_error)
+            self.loader_thread.start()
+            return
+
+        self._show_actual_peak_finder()
+
+    def _show_actual_peak_finder(self):
+        """ Actually launches the UI after ensuring we are on a safe mirror. """
         if not hasattr(self, 'peak_finder_tool') or self.peak_finder_tool is None:
             self.peak_finder_tool = PeakFinderTool(self)
             
@@ -1048,7 +1134,7 @@ class BadgerLoopQtGraph(QMainWindow):
         orig_name = os.path.basename(fname)
         directory = os.path.dirname(fname)
 
-        if not orig_name.startswith("MIRROR_"):
+        if not orig_name.startswith("MIRROR_") and self.file_type != "ConcatenatedCSV":
             name_only, ext = os.path.splitext(orig_name)
             import glob
             search_pattern = os.path.join(directory, f"MIRROR_{name_only}*{ext}")
@@ -1171,7 +1257,7 @@ class BadgerLoopQtGraph(QMainWindow):
         orig_name = os.path.basename(fname)
         directory = os.path.dirname(fname)
 
-        if not orig_name.startswith("MIRROR_"):
+        if not orig_name.startswith("MIRROR_") and self.file_type != "ConcatenatedCSV":
             name_only, ext = os.path.splitext(orig_name)
             import glob
             search_pattern = os.path.join(directory, f"MIRROR_{name_only}*{ext}")
@@ -1457,7 +1543,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 with open(filepath, "w", encoding='utf-8-sig') as f:
                     f.writelines(out)
                     
-        elif self.file_type == "CSV":
+        elif self.file_type in ["CSV", "ConcatenatedCSV"]:
             delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
             if delim == "auto": delim = ","
             
@@ -1465,30 +1551,39 @@ class BadgerLoopQtGraph(QMainWindow):
                 lines = f.readlines()
                 
             out = []
-            data_row_idx = 0
-            flat_calc = calculated_blocks[0] 
-            
             import re
             has_mirror_flag = any(re.search(r'(?i)Is\s+Mirror\s+File\s*:\s*Yes', l) for l in lines[:15])
             if not has_mirror_flag:
                 out.append("# Is Mirror File: Yes\n")
-            
+                
             header_done = False
+            
+            # Setup tracker for concatenated blocks
+            sweep_idx = 0
+            data_row_idx = 0
+            flat_calc = calculated_blocks[0] if calculated_blocks else []
+            
             for line in lines:
                 clean_line = line.rstrip('\r\n') 
                 if not clean_line or clean_line.startswith('#'): 
                     out.append(line)
+                    # --- NEW: Shift blocks when passing a sweep divider ---
+                    if "--- Sweep" in clean_line and self.file_type == "ConcatenatedCSV":
+                        match = re.search(r'--- Sweep (\d+)', clean_line)
+                        if match:
+                            sweep_idx = int(match.group(1))
+                            if sweep_idx < len(calculated_blocks):
+                                flat_calc = calculated_blocks[sweep_idx]
+                                data_row_idx = 0
+                    # ------------------------------------------------------
                     continue
                     
                 if not header_done: 
                     out.append(f"{clean_line}{delim}{new_name}\n")
                     header_done = True
                 else: 
-                    if data_row_idx < len(flat_calc):
-                        val = flat_calc[data_row_idx]
-                        data_row_idx += 1
-                    else:
-                        val = np.nan 
+                    val = flat_calc[data_row_idx] if data_row_idx < len(flat_calc) else np.nan 
+                    data_row_idx += 1
                     out.append(f"{clean_line}{delim}{val:.6g}\n")
                     
             with open(target_file, "w", encoding='utf-8-sig') as f:
@@ -1625,7 +1720,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 with open(filepath, "w", encoding='utf-8') as f:
                     f.write("\n".join(lines) + "\n")
                     
-        elif self.file_type == "CSV":
+        elif self.file_type in ["CSV", "ConcatenatedCSV"]:
             delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
             if delim == "auto": delim = ","
             
@@ -1747,7 +1842,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 with open(filepath, "w", encoding='utf-8-sig') as f:
                     f.write("\n".join(out) + "\n")
                     
-        elif self.file_type == "CSV":
+        elif self.file_type in ["CSV", "ConcatenatedCSV"]:
             delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
             if delim == "auto": delim = ","
             
@@ -3293,7 +3388,7 @@ class BadgerLoopQtGraph(QMainWindow):
                         self.last_load_opts.get("delimiter", ","), 
                         self.last_load_opts.get("has_header", True)
                     )
-                elif self.file_type == "CSV": 
+                elif self.file_type in ["CSV", "ConcatenatedCSV"]:
                     from core.data_loader import CSVDataset
                     self.dataset = CSVDataset(
                         self.last_file,
@@ -3616,6 +3711,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
             with open(save_path, 'w', encoding='utf-8-sig', newline='') as out_f:
                 # Write Master Metadata
+                out_f.write("# Format: ConcatenatedCSV\n")
                 out_f.write("# Is Mirror File: Yes\n")
                 out_f.write(f"# Concatenated from folder: {os.path.basename(self.dataset.filename)}\n")
                 
@@ -3666,6 +3762,11 @@ class BadgerLoopQtGraph(QMainWindow):
     def _on_load_finished(self, dataset, fname, opts):
         self.progress_dialog.setLabelText("File loaded. Preparing plot...")
         self.file_type = opts["type"]
+        # --- NEW: Auto-upgrade to multi-sweep mode! ---
+        if getattr(dataset, 'is_concatenated', False):
+            self.file_type = "ConcatenatedCSV"
+            opts["type"] = "ConcatenatedCSV"
+        # ----------------------------------------------
         self.last_file = fname
         self.dataset = dataset
         self.last_load_opts = opts 
