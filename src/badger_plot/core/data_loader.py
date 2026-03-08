@@ -178,11 +178,18 @@ class CSVDataset:
         current_sweep_data = []
         sweep_blocks = []
         
+        self.is_concatenated = False
+
         for line in lines:
             clean_line = line.strip()
             if not clean_line: continue
             
             if clean_line.startswith("#"):
+                # --- NEW FLAG DETECTION ---
+                if "Format: ConcatenatedCSV" in clean_line:
+                    self.is_concatenated = True
+                # --------------------------
+
                 if "--- Sweep" in clean_line:
                     if current_sweep_data:
                         sweep_blocks.append(current_sweep_data)
@@ -244,21 +251,37 @@ class DataLoaderThread(QThread):
         try:
             self.progress.emit(10, "Initializing...")
             
-            if self.opts["type"] == "CSV":
+            # Use .get() to prevent crashes if a key is missing
+            opts_type = self.opts.get("type", "BadgerLoop")
+            
+            if opts_type in ["CSV", "ConcatenatedCSV"]:
                 self.progress.emit(30, "Parsing CSV file and detecting sweeps...")
-                ds = CSVDataset(self.filename, self.opts["delimiter"], self.opts["has_header"])
+                ds = CSVDataset(
+                    self.filename, 
+                    self.opts.get("delimiter", ","), 
+                    self.opts.get("has_header", True)
+                )
                 
-            elif self.opts["type"] == "MultiCSV":
+            elif opts_type == "MultiCSV":
                 self.progress.emit(30, "Stitching CSV files into memory...")
-                # We will pass the validated file list from the Main Window
-                ds = MultiCSVDataset(self.filename, self.opts["file_list"], self.opts["delimiter"], self.opts["has_header"])
+                file_list = self.opts.get("file_list", [])
+                if not file_list:
+                    raise ValueError("No file list provided for folder parsing.")
+                ds = MultiCSVDataset(
+                    self.filename, 
+                    file_list, 
+                    self.opts.get("delimiter", ","), 
+                    self.opts.get("has_header", True)
+                )
                 
             else:
                 self.progress.emit(30, "Parsing BadgerLoop binary...")
-                # Assuming your original Dataset class is still in the file
                 ds = Dataset(self.filename) 
                 
             self.progress.emit(100, "Load complete.")
             self.finished.emit(ds)
+            
         except Exception as e:
+            import traceback
+            print(traceback.format_exc()) # Print to console for debugging
             self.error.emit(str(e))
