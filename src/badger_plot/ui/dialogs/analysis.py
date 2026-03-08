@@ -601,7 +601,6 @@ class PeakFinderTool(QDialog):
         selected_rows = list(set([item.row() for item in self.table.selectedItems()]))
         table_cuts = [self.peak_data_memory[r] for r in selected_rows]
         
-        # --- NEW SOURCE OF TRUTH: Read the math arrays, NOT the UI dots! ---
         manual_cuts = []
         if getattr(self.parent_gui, 'selected_indices', set()):
             try:
@@ -620,18 +619,22 @@ class PeakFinderTool(QDialog):
             
         new_name = self.ifft_name_edit.text().strip()
         if not new_name: return
-        # --- NEW UNIQUENESS CHECK ---
+        
         existing_names = list(self.parent_gui.dataset.column_names.values())
         if new_name in existing_names:
             QMessageBox.warning(self, "Duplicate Name", f"The column '{new_name}' already exists.\nPlease choose a unique name.")
             return
-        # ----------------------------
 
         self.parent_gui.clear_peak_markers()
         if hasattr(self.parent_gui, 'clear_selection'):
             self.parent_gui.clear_selection()
         self.btn_pan.click() 
-        
+
+        # Because the main window safely secured a mirror before opening this tool, 
+        # we can jump straight into the execution!
+        self._execute_ifft_math(all_cuts, new_name)
+
+    def _execute_ifft_math(self, all_cuts, new_name):
         row = max(0, self.parent_gui.series_list.currentRow())
         pair = self.parent_gui.series_data["2D"][row]
         xidx, yidx = pair['x'], pair['y']
@@ -720,6 +723,7 @@ class PeakFinderTool(QDialog):
                 # 6. Plot the beautiful filtered spectrum!
                 self.parent_gui.plot()
                 
+            from core.data_loader import DataLoaderThread
             self.parent_gui.loader_thread = DataLoaderThread(self.parent_gui.dataset.filename, opts)
             self.parent_gui.loader_thread.progress.connect(self.parent_gui._update_progress_ui)
             self.parent_gui.loader_thread.finished.connect(on_ifft_loaded)
