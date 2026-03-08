@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QLineEdit, QComboBox, QStackedLayout, 
     QMessageBox, QProgressDialog, QListWidget, QAction, QGridLayout, 
-    QButtonGroup, QApplication, QDialog, QFormLayout, QTextEdit
+    QButtonGroup, QApplication, QDialog, QFormLayout, QTextEdit, QGroupBox, QSpinBox
 )
 
 # Core imports
@@ -86,6 +86,77 @@ class TemplateSelectionDialog(QDialog):
         
     def get_selected_signature(self):
         return self.sig_mapping[self.list_widget.currentRow()]
+    
+class LODSettingsDialog(QDialog):
+    def __init__(self, current_settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Level of Detail (LOD) Settings")
+        self.setMinimumWidth(400)
+        layout = QVBoxLayout(self)
+        
+        # 2D Settings
+        group_2d = QGroupBox("2D Plot Performance")
+        form_2d = QFormLayout(group_2d)
+        
+        self.method_combo = QComboBox()
+        self.method_combo.addItems(["Peak (Safest)", "Subsample (Fastest)", "Mean (Visual Smoothing)"])
+        self.method_combo.setCurrentText(current_settings.get('method', "Peak (Safest)"))
+        form_2d.addRow("Downsample Method:", self.method_combo)
+        
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["Dynamic Auto-Scaling", "Fixed Factor"])
+        self.mode_combo.setCurrentText(current_settings.get('mode', "Dynamic Auto-Scaling"))
+        form_2d.addRow("Aggressiveness:", self.mode_combo)
+        
+        self.fixed_spin = QSpinBox()
+        self.fixed_spin.setRange(2, 10000)
+        self.fixed_spin.setValue(current_settings.get('fixed_factor', 10))
+        form_2d.addRow("Fixed Factor (1 in N):", self.fixed_spin)
+        
+        self.mode_combo.currentTextChanged.connect(self._toggle_fixed)
+        self._toggle_fixed(self.mode_combo.currentText())
+        layout.addWidget(group_2d)
+        
+        # 3D Settings
+        group_3d = QGroupBox("3D Plot Performance")
+        form_3d = QFormLayout(group_3d)
+        
+        self.vertex_spin = QSpinBox()
+        self.vertex_spin.setRange(1000, 5000000)
+        self.vertex_spin.setSingleStep(10000)
+        self.vertex_spin.setValue(current_settings.get('vertex_limit', 100000))
+        form_3d.addRow("Max 3D Vertices:", self.vertex_spin)
+        
+        self.surface_spin = QSpinBox()
+        self.surface_spin.setRange(50, 2000)
+        self.surface_spin.setSingleStep(50)
+        self.surface_spin.setValue(current_settings.get('surface_limit', 250))
+        form_3d.addRow("Max Surface Grid:", self.surface_spin)
+        layout.addWidget(group_3d)
+        
+        btn_box = QHBoxLayout()
+        apply_btn = QPushButton("Apply Settings")
+        apply_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        apply_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        
+        btn_box.addStretch()
+        btn_box.addWidget(cancel_btn)
+        btn_box.addWidget(apply_btn)
+        layout.addLayout(btn_box)
+        
+    def _toggle_fixed(self, text):
+        self.fixed_spin.setEnabled(text == "Fixed Factor")
+        
+    def get_settings(self):
+        return {
+            'method': self.method_combo.currentText(),
+            'mode': self.mode_combo.currentText(),
+            'fixed_factor': self.fixed_spin.value(),
+            'vertex_limit': self.vertex_spin.value(),
+            'surface_limit': self.surface_spin.value()
+        }
 
 class BadgerLoopQtGraph(QMainWindow):
     def __init__(self):
@@ -1000,6 +1071,16 @@ class BadgerLoopQtGraph(QMainWindow):
         crosshair_action.setShortcut("Ctrl+H") 
         crosshair_action.triggered.connect(self.toggle_crosshairs)
         inspect_menu.addAction(crosshair_action)
+
+        self.lod_action = QAction("✔ Toggle Dynamic LODs (Performance)", self)
+        self.lod_action.setCheckable(True)
+        self.lod_action.setChecked(True)
+        self.lod_action.triggered.connect(self.toggle_lod)
+        inspect_menu.addAction(self.lod_action)
+        
+        lod_settings_action = QAction("LOD Settings...", self)
+        lod_settings_action.triggered.connect(self.open_lod_settings)
+        inspect_menu.addAction(lod_settings_action)
         
         # Analysis Menu
         analysis_menu = menubar.addMenu("Analysis")
@@ -2926,6 +3007,37 @@ class BadgerLoopQtGraph(QMainWindow):
         else:
             self.snap_toggle_btn.setVisible(True)
             
+    def toggle_lod(self):
+        self.lod_enabled = self.lod_action.isChecked()
+        if self.lod_enabled:
+            self.lod_action.setText("✔ Toggle Dynamic LODs (Performance)")
+        else:
+            self.lod_action.setText("✖ Toggle Dynamic LODs (Performance)")
+        self.plot()
+        
+    def open_lod_settings(self):
+        current_settings = {
+            'method': getattr(self, 'lod_2d_method', "Peak (Safest)"),
+            'mode': getattr(self, 'lod_2d_mode', "Dynamic Auto-Scaling"),
+            'fixed_factor': getattr(self, 'lod_2d_fixed_factor', 10),
+            'vertex_limit': getattr(self, 'lod_3d_vertex_limit', 100000),
+            'surface_limit': getattr(self, 'lod_3d_surface_limit', 250)
+        }
+        dlg = LODSettingsDialog(current_settings, self)
+        if dlg.exec() == QDialog.Accepted:
+            new_settings = dlg.get_settings()
+            self.lod_2d_method = new_settings['method']
+            self.lod_2d_mode = new_settings['mode']
+            self.lod_2d_fixed_factor = new_settings['fixed_factor']
+            self.lod_3d_vertex_limit = new_settings['vertex_limit']
+            self.lod_3d_surface_limit = new_settings['surface_limit']
+            
+            if not self.lod_action.isChecked():
+                self.lod_action.setChecked(True)
+                self.toggle_lod()
+            else:
+                self.plot()
+            
     def _update_snap_btn_ui(self):
         if self.snap_toggle_btn.isChecked():
             self.snap_toggle_btn.setText("✔ Snap Crosshair to Point")
@@ -3318,6 +3430,17 @@ class BadgerLoopQtGraph(QMainWindow):
         
         self.legend_visible = self.settings.value("legend", True, bool)
         self.fit_legend.setVisible(self.legend_visible)
+        # --- NEW: Restore LOD Setting ---
+        self.lod_enabled = self.settings.value("lod_enabled", True, bool)
+        self.lod_2d_method = self.settings.value("lod_2d_method", "Peak (Safest)")
+        self.lod_2d_mode = self.settings.value("lod_2d_mode", "Dynamic Auto-Scaling")
+        self.lod_2d_fixed_factor = int(self.settings.value("lod_2d_fixed_factor", 10))
+        self.lod_3d_vertex_limit = int(self.settings.value("lod_3d_vertex_limit", 100000))
+        self.lod_3d_surface_limit = int(self.settings.value("lod_3d_surface_limit", 250))
+        if hasattr(self, 'lod_action'): 
+            self.lod_action.setChecked(self.lod_enabled)
+            self.lod_action.setText("✔ Toggle Dynamic LODs (Performance)" if self.lod_enabled else "✖ Toggle Dynamic LODs (Performance)")
+        # --------------------------------
         self.average_enabled = self.settings.value("average", False, bool)
         self.last_file = self.settings.value("last_file", "")
         self.file_type = self.settings.value("file_type", "BadgerLoop")
@@ -3464,6 +3587,12 @@ class BadgerLoopQtGraph(QMainWindow):
     def closeEvent(self, e):
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("legend", self.legend_visible)
+        self.settings.setValue("lod_enabled", getattr(self, 'lod_enabled', True))
+        self.settings.setValue("lod_2d_method", getattr(self, 'lod_2d_method', "Peak (Safest)"))
+        self.settings.setValue("lod_2d_mode", getattr(self, 'lod_2d_mode', "Dynamic Auto-Scaling"))
+        self.settings.setValue("lod_2d_fixed_factor", getattr(self, 'lod_2d_fixed_factor', 10))
+        self.settings.setValue("lod_3d_vertex_limit", getattr(self, 'lod_3d_vertex_limit', 100000))
+        self.settings.setValue("lod_3d_surface_limit", getattr(self, 'lod_3d_surface_limit', 250))
         self.settings.setValue("last_file", self.last_file)
         self.settings.setValue("file_type", self.file_type)
         # --- NEW: Save the load options (delimiter, file list, etc) ---
@@ -4076,8 +4205,14 @@ class BadgerLoopQtGraph(QMainWindow):
             if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
             dummy_arr = np.array([0.0], dtype=np.float64)
             for c in self.curve_pool: 
+                # --- NEW: Safely turn off LOD before clearing data ---
+                if hasattr(c, 'setClipToView'): c.setClipToView(False)
+                if hasattr(c, 'setDownsampling'): c.setDownsampling(auto=False)
+                
                 c.setData(x=dummy_arr, y=dummy_arr)
                 c.setVisible(False)
+                try: self.plot_widget.getViewBox().removeItem(c) # Check ViewBox directly
+                except: pass
                 try: self.plot_widget.removeItem(c)
                 except: pass
                 try: self.vb_right.removeItem(c)
@@ -4239,7 +4374,12 @@ class BadgerLoopQtGraph(QMainWindow):
                 if axis_side == "R":
                     legend_name += " [Top/Right]"
                 
+                # --- NEW: Explicitly target the ViewBox, not the PlotWidget ---
+                target_vb = self.vb_right if axis_side == "R" else self.plot_widget.getViewBox()
+                use_lod = getattr(self, 'lod_enabled', True)
+                
                 target_vb = self.vb_right if axis_side == "R" else self.plot_widget
+                use_lod = getattr(self, 'lod_enabled', True)
                 
                 if pkg["type"] == "average":
                     if scatter_idx >= len(self.scatter_pool):
@@ -4275,14 +4415,43 @@ class BadgerLoopQtGraph(QMainWindow):
                         err_idx += 1
                         
                 elif pkg["type"] == "standard":
-                    if graphtype in ["Line", "FFT (Spectrum)"]:
+                    is_scatter = (graphtype == "Scatter")
+                    
+                    # --- NEW DYNAMIC LOD ENGINE ---
+                    if graphtype in ["Line", "FFT (Spectrum)"] or (is_scatter and use_lod):
+                        # USE PlotDataItem HERE instead of PlotCurveItem!
                         if curve_idx >= len(self.curve_pool):
-                            c = pg.PlotCurveItem(skipFiniteCheck=True, autoDownsample=True)
+                            c = pg.PlotDataItem(skipFiniteCheck=True)
                             self.curve_pool.append(c)
                             
                         curve = self.curve_pool[curve_idx]
                         target_vb.addItem(curve)
-                        curve.setData(pkg["x"], pkg["y"], pen=pg.mkPen(line_color, width=2))
+                        
+                        # Read the user's custom UI settings
+                        method_map = {"Peak (Safest)": "peak", "Subsample (Fastest)": "subsample", "Mean (Visual Smoothing)": "mean"}
+                        raw_method = getattr(self, 'lod_2d_method', "Peak (Safest)")
+                        pg_method = method_map.get(raw_method, 'peak')
+                        
+                        auto_mode = getattr(self, 'lod_2d_mode', "Dynamic Auto-Scaling") == "Dynamic Auto-Scaling"
+                        fixed_ds = getattr(self, 'lod_2d_fixed_factor', 10)
+
+                        if is_scatter:
+                            curve.setData(x=pkg["x"], y=pkg["y"], pen=None, symbol='o', symbolSize=pt_size, symbolBrush=pg.mkBrush(line_color), symbolPen=None)
+                            if use_lod:
+                                curve.setDownsampling(ds=1 if auto_mode else fixed_ds, auto=auto_mode, method=pg_method)
+                                curve.setClipToView(True)
+                            else:
+                                curve.setDownsampling(auto=False)
+                                curve.setClipToView(False)
+                        else:
+                            curve.setData(x=pkg["x"], y=pkg["y"], pen=pg.mkPen(line_color, width=2), symbol=None)
+                            if use_lod:
+                                curve.setDownsampling(ds=1 if auto_mode else fixed_ds, auto=auto_mode, method=pg_method)
+                                curve.setClipToView(True)
+                            else:
+                                curve.setDownsampling(auto=False)
+                                curve.setClipToView(False)
+                                
                         curve.setVisible(True)
                         
                         if show_legend:
@@ -4292,6 +4461,7 @@ class BadgerLoopQtGraph(QMainWindow):
                                 
                         curve_idx += 1
                     else:
+                        # Fallback for pure un-decimated scatter points (Heavy!)
                         if scatter_idx >= len(self.scatter_pool):
                             s = pg.ScatterPlotItem(pxMode=True)
                             self.scatter_pool.append(s)
@@ -4334,9 +4504,6 @@ class BadgerLoopQtGraph(QMainWindow):
             self.plot_widget.getViewBox().autoRange()
             self.vb_right.autoRange()
 
-            # =========================================================================
-            # NEW FIX: ALWAYS RESTORE SELECTION TOOLS TO THE TOP LAYER AFTER REDRAWING
-            # =========================================================================
             try:
                 self.plot_widget.removeItem(self.selection_curve)
                 self.plot_widget.removeItem(self.highlight_scatter)
@@ -4347,11 +4514,18 @@ class BadgerLoopQtGraph(QMainWindow):
             self.selection_curve.setZValue(1000)
             self.highlight_scatter.setZValue(1001)
             
-            # If there was a pre-existing selection, keep it highlighted!
+            # =========================================================================
+            # NEW FIX: LIMIT YELLOW HIGHLIGHT DOTS TO PREVENT UI FREEZES
+            # =========================================================================
             if getattr(self, 'selected_indices', set()):
                 x_vis, y_vis, _, _ = self._get_all_plotted_xy(apply_selection=False)
-                idx_array = [i for i in list(self.selected_indices) if i < len(x_vis)]
-                if idx_array:
+                idx_list = sorted(list(self.selected_indices))
+                idx_array = np.array([i for i in idx_list if i < len(x_vis)])
+                
+                if len(idx_array) > 0:
+                    if getattr(self, 'lod_enabled', True) and len(idx_array) > 5000:
+                        step = max(1, len(idx_array) // 5000)
+                        idx_array = idx_array[::step]
                     self.highlight_scatter.setData(x_vis[idx_array], y_vis[idx_array])
                     self.highlight_scatter.show()
                 else:
@@ -4380,12 +4554,23 @@ class BadgerLoopQtGraph(QMainWindow):
             scale_factors = 10.0 / spans
             
             import matplotlib
+            use_lod = getattr(self, 'lod_enabled', True)
             
             if all_pts_raw[0][0] == "SURFACE":
                 surface_dict = all_pts_raw[0][2]
                 x_1d = surface_dict["x_1d"]
                 y_1d = surface_dict["y_1d"]
                 z_2d = surface_dict["z_2d"]
+                
+                # --- NEW 3D SURFACE LOD ENGINE ---
+                s_limit = getattr(self, 'lod_3d_surface_limit', 250)
+                if use_lod and (z_2d.shape[0] > s_limit or z_2d.shape[1] > s_limit):
+                    step_x = max(1, z_2d.shape[0] // s_limit)
+                    step_y = max(1, z_2d.shape[1] // s_limit)
+                    x_1d = x_1d[::step_x]
+                    y_1d = y_1d[::step_y]
+                    z_2d = z_2d[::step_x, ::step_y]
+                # ----------------------------------------------------
                 
                 x_scaled = (x_1d - mins[0]) * scale_factors[0]
                 y_scaled = (y_1d - mins[1]) * scale_factors[1]
@@ -4411,7 +4596,18 @@ class BadgerLoopQtGraph(QMainWindow):
                 cmap = matplotlib.colormaps.get_cmap('jet') 
                 num_sweeps_plotted = len(all_pts_raw)
                 
+                # --- NEW 3D SCATTER/LINE LOD ENGINE ---
+                v_limit = getattr(self, 'lod_3d_vertex_limit', 100000)
+                total_pts = sum(len(pts) for _, _, pts in all_pts_raw)
+                step = 1
+                if use_lod and total_pts > v_limit:
+                    step = max(1, total_pts // v_limit)
+                # ---------------------------------------------------------------
+                
                 for idx, (i, sw, pts) in enumerate(all_pts_raw):
+                    if step > 1:
+                        pts = pts[::step]
+                        
                     norm_pts = np.zeros_like(pts, dtype=np.float32)
                     norm_pts[:, 0] = (pts[:, 0] - mins[0]) * scale_factors[0]
                     norm_pts[:, 1] = (pts[:, 1] - mins[1]) * scale_factors[1]
