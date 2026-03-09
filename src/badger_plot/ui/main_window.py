@@ -1965,9 +1965,9 @@ class BadgerLoopQtGraph(QMainWindow):
         for p in param_names:
             if param_config[p]["mode"] == "Auto":
                 free_params.append(p)
-                p0.append(param_config[p]["value"])
+                p0.append(float(param_config[p]["value"]))
             else:
-                fixed_params[p] = param_config[p]["value"]
+                fixed_params[p] = float(param_config[p]["value"])
         
         if not free_params:
             return [param_config[p]["value"] for p in param_names]
@@ -1981,8 +1981,10 @@ class BadgerLoopQtGraph(QMainWindow):
             
         from scipy.optimize import curve_fit
         import warnings
+        
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
+            # Naked SciPy execution exactly as the monolith did. No artificial traps!
             popt, _ = curve_fit(dynamic_wrapper, x, y, p0=p0, maxfev=20000)
             
         final_params = []
@@ -2014,23 +2016,41 @@ class BadgerLoopQtGraph(QMainWindow):
         elif func_type == "Lorentzian": self.fit_lorentzian(param_config)
             
     def open_custom_fit_dialog(self):
+        from PyQt5.QtWidgets import QDialog
         if not self.dataset: return
         dlg = CustomFitDialog(self.dataset, self)
+        
         if dlg.exec() != QDialog.Accepted: 
             if hasattr(self, 'phantom_curve'): self.phantom_curve.setVisible(False)
             return
             
         if hasattr(self, 'phantom_curve'): self.phantom_curve.setVisible(False)
+        
         raw_eq, py_eq, html_eq, used_cols, param_names, param_config = dlg.get_result()
         
-        # 1. Grab JUST the selected points for the math solver
-        res_calc = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=True)
-        if len(res_calc) < 4 or len(res_calc[0]) == 0: return
-        x_calc, y_calc, aux_calc, pair = res_calc
-        
-        # 2. Grab the FULL dataset so we can draw the line across the whole screen later
         res_full = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=False)
-        x_full, y_full, aux_full, _ = res_full
+        if len(res_full) < 4 or len(res_full[0]) == 0: return
+        x_full, y_full, aux_full, pair = res_full
+        
+        import numpy as np
+        
+        # --- SAFE DICT ---
+        safe_dict = aux_full if aux_full is not None else {}
+        safe_aux_full = {}
+        for c in used_cols:
+            safe_aux_full[c] = safe_dict.get(c, np.zeros_like(x_full))
+        # -----------------
+        
+        if getattr(self, 'selected_indices', set()):
+            idx = sorted(list(self.selected_indices))
+            valid_idx = [i for i in idx if i < len(x_full)]
+            x_calc = x_full[valid_idx]
+            y_calc = y_full[valid_idx]
+            aux_calc = {c: safe_aux_full[c][valid_idx] for c in used_cols}
+        else:
+            x_calc = x_full
+            y_calc = y_full
+            aux_calc = safe_aux_full
         
         def custom_model_calc(x_val, *args):
             env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "data_dict": aux_calc}
@@ -2047,7 +2067,7 @@ class BadgerLoopQtGraph(QMainWindow):
 
         sort_idx = np.argsort(x_full)
         x_sorted = x_full[sort_idx]
-        sorted_aux = {c: aux_full[c][sort_idx] for c in used_cols}
+        sorted_aux = {c: safe_aux_full[c][sort_idx] for c in used_cols}
         
         def plot_model(x_arr, aux_arrs, *args):
             env = {"np": np, "e": np.e, "pi": np.pi, "x": x_arr, "data_dict": aux_arrs}
@@ -2058,6 +2078,8 @@ class BadgerLoopQtGraph(QMainWindow):
             
         yfit = plot_model(x_sorted, sorted_aux, *final_params)
 
+        import pyqtgraph as pg
+        from PyQt5.QtCore import Qt
         plot_item = self.plot_widget.plot(x_sorted, yfit, pen=pg.mkPen("r", width=2, style=Qt.DashLine))
         fit_name = f"Custom Fit ➔ {pair['y_name']}"
         self.fit_legend.addItem(plot_item, fit_name)
@@ -2076,10 +2098,13 @@ class BadgerLoopQtGraph(QMainWindow):
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
 
     def _get_all_plotted_xy(self, apply_selection=False, aux_cols=None):
-        if not self.dataset: return [], [], None, {}
+        import numpy as np
+        if not self.dataset: return np.array([]), np.array([]), {}, None
         row = max(0, self.series_list.currentRow())
-        if row >= len(self.series_data["2D"]): return [], [], None, {}
+        if row >= len(self.series_data["2D"]): return np.array([]), np.array([]), {}, None
         pair = self.series_data["2D"][row]
+        
+        if aux_cols is None: aux_cols = []
         
         # --- INTERCEPT FFT MODE ---
         if getattr(self, 'fft_mode_active', False) and hasattr(self, 'last_plotted_data'):
@@ -2087,86 +2112,95 @@ class BadgerLoopQtGraph(QMainWindow):
             if pkgs:
                 x_fft = pkgs[0]['x']
                 y_fft = pkgs[0]['y']
+                # Failsafe aux dict for FFT (aux cols aren't naturally FFT'd, so we return zeros to prevent NoneType)
+                aux_dict = {c: np.zeros_like(x_fft) for c in aux_cols}
                 if apply_selection and getattr(self, 'selected_indices', set()):
                     idx = np.array(list(self.selected_indices))
                     valid_idx = idx[idx < len(x_fft)]
-                    return x_fft[valid_idx], y_fft[valid_idx], None, pair
-                return x_fft, y_fft, None, pair
+                    return x_fft[valid_idx], y_fft[valid_idx], {c: v[valid_idx] for c, v in aux_dict.items()}, pair
+                return x_fft, y_fft, aux_dict, pair
 
-        # --- INTERCEPT AVERAGING MODE ---
-        if getattr(self, 'average_enabled', False) and hasattr(self, 'last_plotted_data'):
-            pkgs = [p for p in self.last_plotted_data.get('packages', []) if p.get("pair_idx", 0) == row and p.get("type") == "average"]
-            if pkgs:
-                # Pluck the pre-calculated means directly from the renderer's memory!
-                x_avg = np.array([p['x_mean'] for p in pkgs], dtype=np.float64)
-                y_avg = np.array([p['y_mean'] for p in pkgs], dtype=np.float64)
-                if apply_selection and getattr(self, 'selected_indices', set()):
-                    idx = np.array(list(self.selected_indices))
-                    valid_idx = idx[idx < len(x_avg)]
-                    return x_avg[valid_idx], y_avg[valid_idx], None, pair
-                return x_avg, y_avg, None, pair
-
-        # --- STANDARD RAW DATA RETRIEVAL ---
         xidx, yidx = pair['x'], pair['y']
         aux_dict = {}
         
-        if self.file_type == "CSV":
-            x = np.asarray(self.dataset.data[:, xidx], dtype=np.float64)
-            y = np.asarray(self.dataset.data[:, yidx], dtype=np.float64)
-            if aux_cols:
-                for c in aux_cols: aux_dict[c] = np.asarray(self.dataset.data[:, c], dtype=np.float64)
-        else:
-            sweeps = self.parse_list(self.sweeps_edit.text())
-            if sweeps == -1: sweeps = list(range(self.dataset.num_sweeps))
-            
-            x_list, y_list = [], []
-            if aux_cols:
-                for c in aux_cols: aux_dict[c] = []
-                
-            for sw_idx in sweeps:
-                if sw_idx >= len(self.dataset.sweeps): continue
-                sw = self.dataset.sweeps[sw_idx].data
-                x_list.append(np.asarray(sw[:, xidx], dtype=np.float64))
-                y_list.append(np.asarray(sw[:, yidx], dtype=np.float64))
-                if aux_cols:
-                    for c in aux_cols: aux_dict[c].append(np.asarray(sw[:, c], dtype=np.float64))
-                    
-            if x_list:
-                x = np.concatenate(x_list)
-                y = np.concatenate(y_list)
-                if aux_cols:
-                    for c in aux_cols: aux_dict[c] = np.concatenate(aux_dict[c])
-            else:
-                x, y = np.array([]), np.array([])
-                
+        is_csv = (self.file_type in ["CSV", "ConcatenatedCSV"])
+        is_averaged = (not is_csv) and getattr(self, 'average_enabled', False)
+        
         xlog = self.xscale.currentText() == "Log"
         ylog = self.yscale.currentText() == "Log"
         xbase = getattr(self, '_parse_log_base', lambda val: 10.0)(self.xbase.text())
         ybase = getattr(self, '_parse_log_base', lambda val: 10.0)(self.ybase.text())
         
-        with np.errstate(divide='ignore', invalid='ignore'):
-            if xlog: 
-                mask = x > 0
-                x, y = np.log(x[mask]) / np.log(xbase), y[mask]
-                if aux_cols:
-                    for c in aux_cols: aux_dict[c] = aux_dict[c][mask]
-            if ylog:
-                mask = y > 0
-                x, y = x[mask], np.log(y[mask]) / np.log(ybase)
-                if aux_cols:
-                    for c in aux_cols: aux_dict[c] = aux_dict[c][mask]
-                    
-        valid = np.isfinite(x) & np.isfinite(y)
-        x, y = x[valid], y[valid]
-        if aux_cols:
-            for c in aux_cols: aux_dict[c] = aux_dict[c][valid]
+        if is_csv:
+            x_raw = np.asarray(self.dataset.data[:, xidx], dtype=np.float64)
+            y_raw = np.asarray(self.dataset.data[:, yidx], dtype=np.float64)
+            c_raw_dict = {c: np.asarray(self.dataset.data[:, c], dtype=np.float64) for c in aux_cols}
             
+            with np.errstate(divide='ignore', invalid='ignore'):
+                if xlog: 
+                    mask = x_raw > 0; x_raw = np.log(x_raw[mask]) / np.log(xbase); y_raw = y_raw[mask]
+                    for c in aux_cols: c_raw_dict[c] = c_raw_dict[c][mask]
+                if ylog: 
+                    mask = y_raw > 0; x_raw = x_raw[mask]; y_raw = np.log(y_raw[mask]) / np.log(ybase)
+                    for c in aux_cols: c_raw_dict[c] = c_raw_dict[c][mask]
+                    
+            valid = np.isfinite(x_raw) & np.isfinite(y_raw)
+            x = x_raw[valid]
+            y = y_raw[valid]
+            for c in aux_cols: aux_dict[c] = c_raw_dict[c][valid]
+        else:
+            sweeps = self.parse_list(self.sweeps_edit.text())
+            if sweeps == -1: sweeps = list(range(self.dataset.num_sweeps))
+            
+            x_list, y_list = [], []
+            for c in aux_cols: aux_dict[c] = []
+
+            for sw_idx in sweeps:
+                if sw_idx >= len(self.dataset.sweeps): continue
+                sw = self.dataset.sweeps[sw_idx].data
+                x_raw = np.asarray(sw[:, xidx], dtype=np.float64)
+                y_raw = np.asarray(sw[:, yidx], dtype=np.float64)
+                
+                c_raw_dict = {c: np.asarray(sw[:, c], dtype=np.float64) for c in aux_cols}
+                    
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    if xlog: 
+                        mask = x_raw > 0; x_raw = np.log(x_raw[mask]) / np.log(xbase); y_raw = y_raw[mask]
+                        for c in aux_cols: c_raw_dict[c] = c_raw_dict[c][mask]
+                    if ylog: 
+                        mask = y_raw > 0; x_raw = x_raw[mask]; y_raw = np.log(y_raw[mask]) / np.log(ybase)
+                        for c in aux_cols: c_raw_dict[c] = c_raw_dict[c][mask]
+                        
+                valid = np.isfinite(x_raw) & np.isfinite(y_raw)
+                x_valid = x_raw[valid]
+                y_valid = y_raw[valid]
+                
+                if len(x_valid) == 0: continue
+                
+                # --- CRITICAL FIX: AVERAGE THE AUXILIARY COLUMNS TOO! ---
+                if is_averaged:
+                    x_list.append(np.array([np.mean(x_valid)]))
+                    y_list.append(np.array([np.mean(y_valid)]))
+                    for c in aux_cols:
+                        aux_dict[c].append(np.array([np.mean(c_raw_dict[c][valid])]))
+                else:
+                    x_list.append(x_valid)
+                    y_list.append(y_valid)
+                    for c in aux_cols:
+                        aux_dict[c].append(c_raw_dict[c][valid])
+                    
+            if x_list:
+                x = np.concatenate(x_list)
+                y = np.concatenate(y_list)
+                for c in aux_cols: aux_dict[c] = np.concatenate(aux_dict[c])
+            else:
+                x, y = np.array([]), np.array([])
+                for c in aux_cols: aux_dict[c] = np.array([])
+
         if apply_selection and getattr(self, 'selected_indices', set()):
             idx = np.array(list(self.selected_indices))
             valid_idx = idx[idx < len(x)]
-            if aux_cols:
-                return x[valid_idx], y[valid_idx], {c: v[valid_idx] for c, v in aux_dict.items()}, pair
-            return x[valid_idx], y[valid_idx], None, pair
+            return x[valid_idx], y[valid_idx], {c: v[valid_idx] for c, v in aux_dict.items()}, pair
             
         return x, y, aux_dict, pair
 
@@ -2184,24 +2218,44 @@ class BadgerLoopQtGraph(QMainWindow):
                 return
 
         if fit["type"] == "custom":
+            from PyQt5.QtWidgets import QDialog
             dlg = CustomFitDialog(self.dataset, self)
             dlg.load_state(fit)
+            
             if dlg.exec() == QDialog.Accepted:
                 self.plot_widget.removeItem(fit["plot_item"])
                 self.fit_legend.removeItem(fit["plot_item"])
                 self.active_fits.pop(idx)
+                
                 if hasattr(self, 'phantom_curve'): self.phantom_curve.setVisible(False)
                 
                 raw_eq, py_eq, html_eq, used_cols, param_names, param_config = dlg.get_result()
                 
-                # 1. Grab JUST the selected points for the math solver
-                res_calc = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=True)
-                if len(res_calc) < 4 or len(res_calc[0]) == 0: return
-                x_calc, y_calc, aux_calc, pair = res_calc
-                
-                # 2. Grab the FULL dataset so we can draw the line across the whole screen later
                 res_full = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=False)
-                x_full, y_full, aux_full, _ = res_full
+                if len(res_full) < 4 or len(res_full[0]) == 0: return
+                x_full, y_full, aux_full, pair = res_full
+                
+                import numpy as np
+                
+                # --- THE SAFETY NET ---
+                if aux_full is None: aux_full = {}
+                safe_aux_full = {}
+                for c in used_cols:
+                    if c in aux_full and aux_full[c] is not None:
+                        safe_aux_full[c] = aux_full[c]
+                    else:
+                        safe_aux_full[c] = np.zeros_like(x_full)
+                # ----------------------
+                
+                if getattr(self, 'selected_indices', set()):
+                    idx = sorted(list(self.selected_indices))
+                    x_calc = x_full[idx]
+                    y_calc = y_full[idx]
+                    aux_calc = {c: safe_aux_full[c][idx] for c in used_cols}
+                else:
+                    x_calc = x_full
+                    y_calc = y_full
+                    aux_calc = safe_aux_full
                 
                 def custom_model_calc(x_val, *args):
                     env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "data_dict": aux_calc}
@@ -2218,7 +2272,7 @@ class BadgerLoopQtGraph(QMainWindow):
 
                 sort_idx = np.argsort(x_full)
                 x_sorted = x_full[sort_idx]
-                sorted_aux = {c: aux_full[c][sort_idx] for c in used_cols}
+                sorted_aux = {c: safe_aux_full[c][sort_idx] for c in used_cols}
                 
                 def plot_model(x_arr, aux_arrs, *args):
                     env = {"np": np, "e": np.e, "pi": np.pi, "x": x_arr, "data_dict": aux_arrs}
@@ -2228,6 +2282,9 @@ class BadgerLoopQtGraph(QMainWindow):
                     return res_arr
 
                 yfit = plot_model(x_sorted, sorted_aux, *final_params)
+
+                import pyqtgraph as pg
+                from PyQt5.QtCore import Qt
                 plot_item = self.plot_widget.plot(x_sorted, yfit, pen=pg.mkPen("r", width=2, style=Qt.DashLine))
                 fit_name = f"Custom Fit ➔ {pair['y_name']}"
                 self.fit_legend.addItem(plot_item, fit_name)
