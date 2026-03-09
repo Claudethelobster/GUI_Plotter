@@ -305,7 +305,13 @@ class CustomFitDialog(QDialog):
         self.param_table.verticalHeader().setVisible(False)
         layout.addWidget(self.param_table)
 
+        # --- NEW INTERACTIVE BUTTONS ---
         btn_box = QHBoxLayout()
+        
+        self.auto_guess_btn = QPushButton("✨ Auto-Guess Values")
+        self.auto_guess_btn.setStyleSheet("font-weight: bold; color: #2ca02c; padding: 6px;")
+        self.auto_guess_btn.clicked.connect(self.run_auto_guess)
+        self.auto_guess_btn.setEnabled(False) 
         
         self.optimize_btn = QPushButton("Optimize Parameters")
         self.optimize_btn.setStyleSheet("font-weight: bold; padding: 6px;")
@@ -319,6 +325,7 @@ class CustomFitDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         
+        btn_box.addWidget(self.auto_guess_btn)
         btn_box.addWidget(self.optimize_btn)
         btn_box.addStretch()
         btn_box.addWidget(cancel_btn)
@@ -374,17 +381,77 @@ class CustomFitDialog(QDialog):
         self.update_preview()
 
     def _check_boxes_filled(self):
-        if not self.is_valid or not self.parameters:
+        if not getattr(self, 'is_valid', False) or not self.parameters:
             self.optimize_btn.setEnabled(False)
+            self.auto_guess_btn.setEnabled(False)
             return
             
+        # The Global Swarm can run even if the boxes are empty
+        self.auto_guess_btn.setEnabled(True)
+        
+        # Local Optimization requires actual numbers
+        all_filled = True
         for controls in self.param_configs.values():
             if not controls["val"].text().strip():
-                self.optimize_btn.setEnabled(False)
-                return
+                all_filled = False
+                break
                 
-        self.optimize_btn.setEnabled(True)
+        self.optimize_btn.setEnabled(all_filled)
+        if all_filled:
+            self._draw_live_preview()
+            
+    def run_auto_guess(self):
+        import numpy as np
+        if not self.is_valid or not self.parameters: return
+        
+        res = self.parent_gui._get_all_plotted_xy(aux_cols=self.used_cols, apply_selection=True)
+        if len(res) < 4 or len(res[0]) == 0: return
+        x, y, _, _ = res
+
+        # 1. Calculate the physical scale of the data
+        y_max, y_min = np.max(y), np.min(y)
+        y_ptp = y_max - y_min
+        y_mean = np.mean(y)
+        x_mean = np.mean(x)
+        x_std = np.std(x) if np.std(x) != 0 else 1.0
+
+        # 2. Smart Heuristic Mapping
+        for p in self.parameters:
+            if self.param_configs[p]["mode"].currentText() != "Auto":
+                continue
+                
+            p_lower = p.lower()
+            
+            # Amplitude / Scaling parameters
+            if p_lower in ['a', 'amp', 'amplitude']:
+                guess = y_max if y_min >= 0 else y_ptp / 2.0
+            # Offset / Baseline parameters
+            elif p_lower in ['c', 'y0', 'offset', 'base', 'baseline']:
+                guess = y_min if y_min > 0 else y_mean
+            # X-Shift / Center parameters
+            elif p_lower in ['x0', 'mu', 'center', 'xc', 'shift']:
+                guess = x_mean
+            # Width / Time-constant parameters
+            elif p_lower in ['w', 'width', 'sigma', 'tau', 'gamma']:
+                guess = x_std
+            # Frequency parameters
+            elif p_lower in ['b', 'freq', 'frequency', 'omega']:
+                guess = 1.0 / x_std if x_std != 0 else 1.0
+            # Exponents (like your 'alpha') should safely default to 1.0 to prevent explosions!
+            elif p_lower in ['alpha', 'beta', 'n', 'm', 'power', 'deg', 'degree']:
+                guess = 1.0
+            # Absolute fallback
+            else:
+                guess = 1.0
+                
+            # Safely inject the deterministic guess into the UI box
+            self.param_configs[p]["val"].blockSignals(True)
+            self.param_configs[p]["val"].setText(f"{guess:.4g}")
+            self.param_configs[p]["val"].blockSignals(False)
+
+        # Force the phantom curve to update instantly with these new starting points
         self._draw_live_preview()
+        self._check_boxes_filled()
 
     def _draw_live_preview(self):
         if not self.is_valid or not self.parameters: return
@@ -394,16 +461,23 @@ class CustomFitDialog(QDialog):
             try: 
                 param_vals.append(float(self.param_configs[p]["val"].text()))
             except ValueError:
-                return 
+                return # Abort drawing temporarily if they type a invalid character (like '-')
                 
         res = self.parent_gui._get_all_plotted_xy(aux_cols=self.used_cols, apply_selection=False)
-        
         if len(res) < 4 or len(res[0]) == 0: return
-        x, _, aux_dict, _ = res
+        x_full, _, aux_dict, _ = res
         
-        sort_idx = np.argsort(x)
-        x_sorted = x[sort_idx]
-        sorted_aux = {c: aux_dict[c][sort_idx] for c in self.used_cols}
+        import numpy as np
+        sort_idx = np.argsort(x_full)
+        x_sorted = x_full[sort_idx]
+        
+        # --- SAFE DICT ---
+        safe_dict = aux_dict if aux_dict is not None else {}
+        sorted_aux = {}
+        for c in self.used_cols:
+            arr = safe_dict.get(c, np.zeros_like(x_full))
+            sorted_aux[c] = arr[sort_idx]
+        # -----------------
         
         env = {"np": np, "e": np.e, "pi": np.pi, "x": x_sorted, "data_dict": sorted_aux}
         for i, p in enumerate(self.parameters): env[p] = param_vals[i]
@@ -413,14 +487,74 @@ class CustomFitDialog(QDialog):
             if yfit.ndim == 0:
                 yfit = np.full_like(x_sorted, float(yfit))
             
+            import pyqtgraph as pg
+            from PyQt5.QtCore import Qt
             if not hasattr(self.parent_gui, 'phantom_curve'):
                 self.parent_gui.phantom_curve = pg.PlotCurveItem(pen=pg.mkPen("m", width=3, style=Qt.DotLine))
                 self.parent_gui.plot_widget.addItem(self.parent_gui.phantom_curve)
             
             self.parent_gui.phantom_curve.setData(x_sorted, yfit)
             self.parent_gui.phantom_curve.setVisible(True)
-        except Exception:
-            pass
+        except Exception as e:
+            pass # Allows user to keep typing without throwing hard UI errors
+
+    def run_optimization(self):
+        from PyQt5.QtWidgets import QApplication, QMessageBox
+        import numpy as np
+        
+        if not self.is_valid or not self.parameters: return
+        res = self.parent_gui._get_all_plotted_xy(aux_cols=self.used_cols, apply_selection=True)
+        if len(res) < 4 or len(res[0]) == 0: return
+        x, y, aux_dict, _ = res
+
+        safe_dict = aux_dict if aux_dict is not None else {}
+        aux_calc = {c: np.asarray(safe_dict.get(c, np.zeros_like(x))) for c in self.used_cols}
+
+        self.optimize_btn.setText("Optimizing...")
+        self.optimize_btn.setEnabled(False)
+        QApplication.processEvents()
+
+        param_config = {}
+        old_vals = []
+        for p, controls in self.param_configs.items():
+            try: val = float(controls["val"].text())
+            except: val = 1.0
+            param_config[p] = {"mode": controls["mode"].currentText(), "value": val}
+            if controls["mode"].currentText() == "Auto":
+                old_vals.append(val)
+
+        def custom_model(x_val, *args):
+            env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "data_dict": aux_calc}
+            for i, p in enumerate(self.parameters): env[p] = args[i]
+            with np.errstate(all='ignore'):
+                res_arr = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
+            if res_arr.ndim == 0: res_arr = np.full_like(x_val, float(res_arr))
+            
+            res_arr[~np.isfinite(res_arr)] = 1e12 
+            return res_arr
+
+        try:
+            final_params = self.parent_gui._execute_universal_fit(custom_model, self.parameters, param_config, x, y)
+            
+            new_vals = []
+            for i, p in enumerate(self.parameters):
+                if self.param_configs[p]["mode"].currentText() == "Auto":
+                    new_vals.append(final_params[i])
+                    self.param_configs[p]["val"].blockSignals(True)
+                    self.param_configs[p]["val"].setText(f"{final_params[i]:.6g}")
+                    self.param_configs[p]["val"].blockSignals(False)
+            
+            self._draw_live_preview()
+            
+            # --- THE NEW SUCCESS WINDOW ---
+            if old_vals and np.allclose(old_vals, new_vals, rtol=1e-5):
+                QMessageBox.information(self, "Optimization Complete", "The parameters are fully optimized and did not change further.\n\nThe algorithm has found the best mathematical fit for your initial guesses.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Failed", f"Math Error or Failed Convergence.\n\nCheck your initial guesses!\n\nDetails: {e}")
+
+        self.optimize_btn.setText("Optimize Parameters")
+        self.optimize_btn.setEnabled(True)
 
     def open_constants(self):
         dlg = ConstantsDialog(self)
@@ -463,6 +597,8 @@ class CustomFitDialog(QDialog):
         self._check_boxes_filled()
 
     def validate_equation(self, raw_text):
+        import re
+        import numpy as np
         py_equation = raw_text
         self.used_cols = []
         col_map = {v: k for k, v in self.available_columns.items()}
@@ -489,7 +625,9 @@ class CustomFitDialog(QDialog):
 
         def replace_param_silent(match):
             p_key = match.group(1)
-            if p_key in self.parameters: return f"({p_key})"
+            if p_key in self.parameters: 
+                # --- CRITICAL FIX: Leave it as a dynamic string keyword! ---
+                return p_key 
             else: raise ValueError()
             
         try: py_equation = re.sub(r'\{(.*?)\}', replace_param_silent, py_equation)
@@ -507,7 +645,7 @@ class CustomFitDialog(QDialog):
 
         try:
             env = {"np": np, "data_dict": dummy_dict, "e": np.e, "pi": np.pi, "x": np.ones(1)}
-            for p in self.parameters: env[p] = 1.0
+            for p in self.parameters: env[p] = 1.0 # Feed dummy values for validation only
             with np.errstate(all='ignore'):
                 eval(py_equation, {"__builtins__": {}}, env)
             return True, py_equation
@@ -628,44 +766,61 @@ class CustomFitDialog(QDialog):
         self.preview_label.setText(html_text)
         self._check_boxes_filled()
 
-    def run_optimization(self):
+    def run_global_search(self):
         if not self.is_valid or not self.parameters: return
-        res = self.parent_gui._get_all_plotted_xy(aux_cols=self.used_cols)
+        
+        res = self.parent_gui._get_all_plotted_xy(aux_cols=self.used_cols, apply_selection=True)
         if len(res) < 4 or len(res[0]) == 0: return
         x, y, aux_dict, _ = res
 
-        self.optimize_btn.setText("Optimizing...")
+        if aux_dict is None: aux_dict = {}
+        safe_aux = {}
+        for c in self.used_cols:
+            if c in aux_dict and aux_dict[c] is not None:
+                safe_aux[c] = np.asarray(aux_dict[c], dtype=np.float64)
+            else:
+                safe_aux[c] = np.zeros_like(x)
+
+        self.auto_guess_btn.setText("Swarming...")
+        self.auto_guess_btn.setEnabled(False)
         self.optimize_btn.setEnabled(False)
         QApplication.processEvents()
 
-        param_config = {}
-        for p, controls in self.param_configs.items():
-            try: val = float(controls["val"].text())
-            except: val = 1.0
-            param_config[p] = {"mode": controls["mode"].currentText(), "value": val}
+        def objective(params):
+            env = {"np": np, "e": np.e, "pi": np.pi, "x": x, "data_dict": safe_aux}
+            for i, p in enumerate(self.parameters): env[p] = params[i]
+            try:
+                y_pred = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
+                if y_pred.ndim == 0: y_pred = np.full_like(x, float(y_pred))
+                # Return Sum of Squared Errors
+                return np.sum((y - y_pred)**2)
+            except:
+                return np.inf
 
-        def custom_model(x_val, *args):
-            env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "data_dict": aux_dict}
-            for i, p in enumerate(self.parameters): env[p] = args[i]
-            res_arr = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
-            if res_arr.ndim == 0: res_arr = np.full_like(x_val, float(res_arr))
-            return res_arr
+        from scipy.optimize import differential_evolution
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                # Set wide bounds for the swarm (-10,000 to +10,000 for each parameter)
+                bounds = [(-10000.0, 10000.0) for _ in self.parameters]
+                result = differential_evolution(objective, bounds, maxiter=1000, popsize=15, tol=0.01)
+                
+                if result.success:
+                    for i, p in enumerate(self.parameters):
+                        if self.param_configs[p]["mode"].currentText() == "Auto":
+                            self.param_configs[p]["val"].blockSignals(True)
+                            self.param_configs[p]["val"].setText(f"{result.x[i]:.6g}")
+                            self.param_configs[p]["val"].blockSignals(False)
+                    self._draw_live_preview()
+                else:
+                    QMessageBox.warning(self, "Swarm Failed", "The global search could not find a reasonable fit. You may need to guess manually!")
+                    
+            except Exception as e:
+                QMessageBox.critical(self, "Search Error", f"The global search encountered a fatal math error:\n\n{e}")
 
-        try:
-            final_params = self.parent_gui._execute_universal_fit(custom_model, self.parameters, param_config, x, y)
-            
-            for i, p in enumerate(self.parameters):
-                if self.param_configs[p]["mode"].currentText() == "Auto":
-                    self.param_configs[p]["val"].blockSignals(True)
-                    self.param_configs[p]["val"].setText(f"{final_params[i]:.6g}")
-                    self.param_configs[p]["val"].blockSignals(False)
-            
-            self._draw_live_preview()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Failed", f"Math Error or Failed Convergence.\n\nCheck your initial guesses!\n\nDetails: {e}")
-
-        self.optimize_btn.setText("Optimize Parameters")
+        self.auto_guess_btn.setText("✨ Auto-Guess (Global Search)")
+        self.auto_guess_btn.setEnabled(True)
         self.optimize_btn.setEnabled(True)
 
     def handle_done(self):
