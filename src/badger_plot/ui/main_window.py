@@ -25,7 +25,7 @@ from ui.dialogs.data_mgmt import (
     FileImportDialog, SweepTableDialog, ManageColumnsDialog, 
     MetadataDialog, CreateColumnDialog, CopyableErrorDialog
 )
-from ui.dialogs.analysis import SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool
+from ui.dialogs.analysis import SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool, LoopAreaDialog
 from ui.dialogs.fitting import (
     FitFunctionDialog, CustomFitDialog, MultiFitManagerDialog, FitDataToFunctionWindow
 )
@@ -510,6 +510,139 @@ class BadgerLoopQtGraph(QMainWindow):
         self.highlight_scatter.hide()
         self.selection_curve.hide()
         self.stats_label.hide()
+        
+    def open_loop_area_calculator(self):
+        if not self.dataset: return
+        res = self._get_all_plotted_xy(apply_selection=False)
+        if len(res) < 4 or len(res[0]) == 0:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "No Data", "Please plot a 2D curve first.")
+            return
+
+        dlg = LoopAreaDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            loops = dlg.get_selected_loops()
+            self._apply_final_loops(loops)
+        else:
+            self._clear_temp_loops()
+
+    def _clear_temp_loops(self):
+        if not hasattr(self, 'temp_loop_items'): self.temp_loop_items = []
+        for item in self.temp_loop_items:
+            try: self.plot_widget.removeItem(item)
+            except: pass
+        self.temp_loop_items.clear()
+
+    def _draw_temp_loops(self, checked_loops, highlighted_loops):
+        self._clear_temp_loops()
+        
+        from PyQt5.QtWidgets import QGraphicsPolygonItem
+        from PyQt5.QtGui import QPolygonF
+        from PyQt5.QtCore import QPointF
+        import pyqtgraph as pg
+        
+        # Draw standard checked loops (Faint Gray)
+        for loop in checked_loops:
+            if loop in highlighted_loops: continue 
+            
+            # Build native Qt Polygon
+            polygon = QPolygonF([QPointF(x, y) for x, y in zip(loop['x'], loop['y'])])
+            item = QGraphicsPolygonItem(polygon)
+            item.setPen(pg.mkPen((150, 150, 150, 200), width=2))
+            item.setBrush(pg.mkBrush((150, 150, 150, 80)))
+            
+            self.plot_widget.addItem(item)
+            self.temp_loop_items.append(item)
+            
+        # Draw currently selected loop in the list (Bright Green)
+        for loop in highlighted_loops:
+            # Build native Qt Polygon with explicit floats
+            polygon = QPolygonF([QPointF(float(x), float(y)) for x, y in zip(loop['x'], loop['y'])])
+            item = QGraphicsPolygonItem(polygon)
+            item.setFillRule(Qt.WindingFill) # <--- NEW: Forces Qt to shade intersecting/CW lobes
+            
+            item.setPen(pg.mkPen((150, 150, 150, 200), width=2))
+            item.setBrush(pg.mkBrush((150, 150, 150, 80)))
+            
+            self.plot_widget.addItem(item)
+            self.temp_loop_items.append(item)
+
+    def _apply_final_loops(self, loops):
+        self._clear_temp_loops()
+        self._clear_final_loops() # Wipe old final loops
+        if not hasattr(self, 'final_loop_items'): self.final_loop_items = []
+        
+        if not loops: return
+            
+        from PyQt5.QtWidgets import QGraphicsPolygonItem
+        from PyQt5.QtGui import QPolygonF
+        from PyQt5.QtCore import QPointF
+        import pyqtgraph as pg
+            
+        total_abs_area = 0.0
+        total_net_area = 0.0
+        
+        for loop in loops:
+            total_abs_area += loop['abs_area']
+            total_net_area += loop['area']
+            
+            # Physics specific coloring: Blue for Counter-Clockwise (+), Red for Clockwise (-)
+            color = (0, 85, 255, 100) if loop['area'] >= 0 else (217, 0, 0, 100) 
+            border = (0, 85, 255, 200) if loop['area'] >= 0 else (217, 0, 0, 200)
+            
+            polygon = QPolygonF([QPointF(float(x), float(y)) for x, y in zip(loop['x'], loop['y'])])
+            item = QGraphicsPolygonItem(polygon)
+            item.setFillRule(Qt.WindingFill) # <--- NEW
+            
+            item.setPen(pg.mkPen(border, width=2))
+            item.setBrush(pg.mkBrush(color))
+            item.setZValue(-10)
+            
+            self.plot_widget.addItem(item)
+            self.final_loop_items.append(item)
+            
+        # Build the green HUD
+        html = f"<b style='color: #2ca02c; font-size: 14px;'>Loop Area Analysis</b><br><hr style='border: 0; border-top: 1px solid #ccc; margin: 4px 0;'>"
+        html += f"<b>Loops Selected:</b>&nbsp;&nbsp;{len(loops)}<br>"
+        html += f"<b>Total Abs Area:</b>&nbsp;&nbsp;{total_abs_area:.6g}<br>"
+        html += f"<b>Net Area:</b>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{total_net_area:.6g}<br>"
+        html += f"<i style='font-size: 11px;'>(Blue = CCW, Red = CW)</i>"
+        
+        self.loop_stats_label.setText(html)
+        self.loop_stats_label.adjustSize()
+        
+        if not self.loop_stats_label.isVisible():
+            w = self.plot_wrapper.width()
+            self.loop_stats_label.move(w - self.loop_stats_label.width() - 20, 20)
+            
+        self.loop_stats_label.show()
+        self.loop_stats_label.raise_()
+        
+        self.toggle_loop_btn.setVisible(True)
+        self.toggle_loop_btn.setChecked(True)
+        self.toggle_loop_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+
+    def _clear_final_loops(self):
+        if hasattr(self, 'final_loop_items'):
+            for item in self.final_loop_items:
+                try: self.plot_widget.removeItem(item)
+                except: pass
+            self.final_loop_items.clear()
+        if hasattr(self, 'loop_stats_label'): self.loop_stats_label.hide()
+        if hasattr(self, 'toggle_loop_btn'): self.toggle_loop_btn.setVisible(False)
+
+    def _toggle_loop_areas(self):
+        is_checked = self.toggle_loop_btn.isChecked()
+        if is_checked:
+            self.toggle_loop_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+            self.loop_stats_label.show()
+            self.loop_stats_label.raise_()
+        else:
+            self.toggle_loop_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+            self.loop_stats_label.hide()
+            
+        for item in getattr(self, 'final_loop_items', []):
+            item.setVisible(is_checked)
 
     def open_signal_processing(self):
         if not self.dataset: return
@@ -1011,6 +1144,7 @@ class BadgerLoopQtGraph(QMainWindow):
         analysis_menu.addAction("Signal Processing (Smooth / Calculus)").triggered.connect(self.open_signal_processing)
         analysis_menu.addAction("Phase Space Generator (x vs dx/dt)").triggered.connect(self.open_phase_space_dialog)
         analysis_menu.addAction("Automated Peak Finder & iFFT Surgeon").triggered.connect(self.open_peak_finder)
+        analysis_menu.addAction("Enclosed Loop Area Calculator").triggered.connect(self.open_loop_area_calculator)
         
         # Layout Menu
         layout_menu = menubar.addMenu("Layout")
@@ -2772,6 +2906,16 @@ class BadgerLoopQtGraph(QMainWindow):
         controls.addWidget(self.toggle_stats_btn)
         # -----------------------------------
         
+        # --- NEW: LOOP AREAS TOGGLE ---
+        self.toggle_loop_btn = QPushButton("Toggle Loop Areas")
+        self.toggle_loop_btn.setCheckable(True)
+        self.toggle_loop_btn.setChecked(True)
+        self.toggle_loop_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        self.toggle_loop_btn.setVisible(False) 
+        self.toggle_loop_btn.clicked.connect(self._toggle_loop_areas)
+        controls.addWidget(self.toggle_loop_btn)
+        # ------------------------------
+        
         self.toggle_avg_btn = button("Toggle Averaging", self.toggle_averaging)
         controls.addWidget(self.toggle_avg_btn)
         
@@ -3005,6 +3149,20 @@ class BadgerLoopQtGraph(QMainWindow):
             color: #111;
         """)
         self.stats_label.hide()
+        
+        # --- NEW: LOOP STATS HUD ---
+        self.loop_stats_label = DraggableLabel(self.plot_wrapper)
+        self.loop_stats_label.setStyleSheet("""
+            background-color: rgba(240, 255, 240, 230); 
+            border: 2px solid #2ca02c; 
+            border-radius: 6px; 
+            padding: 8px; 
+            font-family: Consolas, monospace;
+            font-size: 13px; 
+            color: #111;
+        """)
+        self.loop_stats_label.hide()
+        # ---------------------------
         
         self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
 
@@ -4180,6 +4338,8 @@ class BadgerLoopQtGraph(QMainWindow):
         if not self.dataset: return
         if getattr(self, '_is_plotting', False) or (hasattr(self, 'plot_thread') and self.plot_thread.isRunning()): return 
         self._is_plotting = True
+        
+        self._clear_final_loops()
         
         if hasattr(self, 'clear_selection'): self.clear_selection()
         
