@@ -8,10 +8,249 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QComboBox,
     QCheckBox, QLabel, QPushButton, QSpinBox, QTableWidget, QHeaderView,
-    QAbstractItemView, QGroupBox, QButtonGroup, QMessageBox, QApplication, QProgressDialog
+    QAbstractItemView, QGroupBox, QButtonGroup, QMessageBox, QApplication, QProgressDialog, QListWidget, QListWidgetItem
 )
 
 from core.data_loader import DataLoaderThread
+
+class LoopAreaDialog(QDialog):
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.main_window = main_window
+        self.setWindowTitle("Enclosed Loop Area Calculator")
+        self.setMinimumSize(450, 500)
+        
+        # Grab the current plotted data
+        res = main_window._get_all_plotted_xy(apply_selection=False)
+        if len(res) < 4 or len(res[0]) == 0:
+            raise ValueError("No valid 2D data to analyze.")
+            
+        self.x, self.y, _, self.pair = res
+        self.detected_loops = [] # Store dictionaries of loop data
+        
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        
+        info = QLabel("<b>Calculate Area of Enclosed Loops</b><br>"
+                      "Finds the area inside a parametric loop (e.g. Hysteresis, P-V Diagrams).")
+        layout.addWidget(info)
+        
+        btn_layout = QHBoxLayout()
+        self.btn_auto = QPushButton("🔍 Auto-Detect Loops")
+        self.btn_auto.setStyleSheet("font-weight: bold; background-color: #d0e8ff;")
+        self.btn_auto.clicked.connect(self._auto_detect)
+        
+        self.btn_manual = QPushButton("🎯 Capture Lasso/Box Selection")
+        self.btn_manual.clicked.connect(self._capture_manual)
+        
+        self.btn_entire = QPushButton("🔄 Treat Entire Plot as 1 Loop")
+        self.btn_entire.clicked.connect(self._capture_entire)
+        
+        btn_layout.addWidget(self.btn_auto)
+        btn_layout.addWidget(self.btn_manual)
+        layout.addLayout(btn_layout)
+        layout.addWidget(self.btn_entire)
+        
+        layout.addSpacing(10)
+        layout.addWidget(QLabel("<b>Detected Loops:</b> (Check boxes to include in final sum)"))
+        
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list_widget.itemChanged.connect(self._on_item_checked)
+        self.list_widget.itemSelectionChanged.connect(self._preview_selected)
+        layout.addWidget(self.list_widget)
+        
+        self.btn_clear = QPushButton("Clear List")
+        self.btn_clear.clicked.connect(self._clear_list)
+        layout.addWidget(self.btn_clear)
+        
+        buttons = QHBoxLayout()
+        ok_btn = QPushButton("Apply & View Results")
+        ok_btn.setStyleSheet("font-weight: bold; color: #0055ff;")
+        cancel_btn = QPushButton("Cancel")
+        
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn.clicked.connect(self.reject)
+        
+        buttons.addStretch()
+        buttons.addWidget(ok_btn)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
+
+    def _calc_shoelace(self, x_arr, y_arr):
+        """ Calculates the exact area of a polygon. Positive = CCW, Negative = CW. """
+        if len(x_arr) < 3: return 0.0
+        # Ensure the loop is closed mathematically
+        x_cl = np.append(x_arr, x_arr[0])
+        y_cl = np.append(y_arr, y_arr[0])
+        area = 0.5 * np.sum(x_cl[:-1] * y_cl[1:] - x_cl[1:] * y_cl[:-1])
+        return area
+
+    def _add_loop_to_list(self, indices, name):
+        if len(indices) < 3: return
+        idx_arr = np.array(indices)
+        x_loop = self.x[idx_arr]
+        y_loop = self.y[idx_arr]
+        
+        area = self._calc_shoelace(x_loop, y_loop)
+        
+        loop_data = {
+            "name": name,
+            "indices": indices,
+            "x": x_loop, "y": y_loop,
+            "area": area,
+            "abs_area": abs(area)
+        }
+        self.detected_loops.append(loop_data)
+        
+        # Determine rotation direction for the UI label
+        direction = "CCW (+)" if area >= 0 else "CW (-)"
+        
+        item = QListWidgetItem(f"{name} | Area: {abs(area):.4g} [{direction}]")
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Checked)
+        item.setData(Qt.UserRole, len(self.detected_loops) - 1)
+        self.list_widget.addItem(item)
+        self._preview_selected()
+
+    def _auto_detect(self):
+        try:
+            from scipy.spatial import cKDTree
+        except ImportError:
+            QMessageBox.warning(self, "Missing Library", "SciPy is required for auto-detection.")
+            return
+            
+        points = np.column_stack((self.x, self.y))
+        
+        x_range = np.ptp(self.x)
+        y_range = np.ptp(self.y)
+        r = max(x_range, y_range) * 0.015 
+        if r == 0: return
+        
+        tree = cKDTree(points)
+        pairs = tree.query_pairs(r=r)
+        
+        used_indices = set()
+        sorted_pairs = sorted(pairs, key=lambda p: p[1] - p[0], reverse=False)
+        
+        # --- NEW: Calculate the maximum possible area of the plot ---
+        total_box_area = x_range * y_range
+        
+        count = 1
+        for i, j in sorted_pairs:
+            if j - i > 15: 
+                loop_set = set(range(i, j+1))
+                if len(loop_set.intersection(used_indices)) < len(loop_set) * 0.1:
+                    
+                    # --- NEW: Reject microscopic jitter/noise loops ---
+                    test_x, test_y = self.x[list(loop_set)], self.y[list(loop_set)]
+                    area = abs(self._calc_shoelace(test_x, test_y))
+                    
+                    if area > (total_box_area * 0.001): # Must be > 0.1% of the plot size
+                        used_indices.update(loop_set)
+                        self._add_loop_to_list(list(range(i, j+1)), f"Auto-Loop {count}")
+                        count += 1
+                        
+        if count == 1:
+            QMessageBox.information(self, "No Loops", "Could not automatically isolate any distinct loops. Try using the Manual Capture tools.")
+
+    def _capture_manual(self):
+        sel_indices = getattr(self.main_window, 'selected_indices', set())
+        if not sel_indices:
+            QMessageBox.warning(self, "No Selection", "Please draw a box or lasso around a loop on the main plot first.")
+            return
+            
+        valid_indices = sorted([i for i in sel_indices if i < len(self.x)])
+        if len(valid_indices) < 3: return
+        
+        count = sum("Manual" in d["name"] for d in self.detected_loops) + 1
+        self._add_loop_to_list(valid_indices, f"Manual Loop {count}")
+        self.main_window.clear_selection()
+
+    def _capture_entire(self):
+        try:
+            from scipy.spatial import cKDTree
+            points = np.column_stack((self.x, self.y))
+            x_range, y_range = np.ptp(self.x), np.ptp(self.y)
+            r = max(x_range, y_range) * 0.01 # 1% proximity radius
+            
+            if r > 0:
+                tree = cKDTree(points)
+                pairs = tree.query_pairs(r=r)
+                
+                n_pts = len(self.x)
+                has_crossings = False
+                
+                for i, j in pairs:
+                    # Check if the points are far apart in time
+                    if abs(i - j) > 20:
+                        # Ignore the loop closing naturally at the start and end
+                        if min(i, j) < 20 and max(i, j) > n_pts - 20:
+                            continue
+                        
+                        # An intersection in the middle of the dataset was found!
+                        has_crossings = True
+                        break
+                        
+                if has_crossings:
+                    ans = QMessageBox.warning(
+                        self, 
+                        "Self-Intersection Detected", 
+                        "It looks like this curve crosses over itself.\n\n"
+                        "Because the Shoelace formula treats Counter-Clockwise area as Positive and Clockwise area as Negative, treating this entire plot as one continuous loop will compute the Net Area (opposing lobes will cancel each other out).\n\n"
+                        "If you want the Absolute Total Area, use the 'Auto-Detect Loops' tool instead to split it into separate polygons.\n\n"
+                        "Do you still want to treat this as 1 continuous loop?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if ans == QMessageBox.No:
+                        return
+                        
+        except ImportError:
+            pass # Silently skip the check if SciPy isn't loaded
+            
+        self._add_loop_to_list(list(range(len(self.x))), "Entire Plot Sequence")
+
+    def _clear_list(self):
+        self.list_widget.clear()
+        self.detected_loops.clear()
+        self._preview_selected()
+
+    def _on_item_checked(self, item):
+        self._preview_selected()
+
+    def _preview_selected(self):
+        # Gather all checked loops, and highlight currently clicked ones in the list
+        checked_loops = []
+        highlighted_loops = []
+        
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            loop_idx = item.data(Qt.UserRole)
+            loop = self.detected_loops[loop_idx]
+            
+            if item.checkState() == Qt.Checked:
+                checked_loops.append(loop)
+            if item.isSelected():
+                highlighted_loops.append(loop)
+                
+        # Send them to the main window to be drawn as phantom polygons
+        if hasattr(self.main_window, '_draw_temp_loops'):
+            self.main_window._draw_temp_loops(checked_loops, highlighted_loops)
+
+    def get_selected_loops(self):
+        checked_loops = []
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.checkState() == Qt.Checked:
+                checked_loops.append(self.detected_loops[item.data(Qt.UserRole)])
+        return checked_loops
+
+    def closeEvent(self, event):
+        if hasattr(self.main_window, '_clear_temp_loops'):
+            self.main_window._clear_temp_loops()
+        super().closeEvent(event)
 
 class SignalProcessingDialog(QDialog):
     preview_updated = pyqtSignal(object, object)
