@@ -90,7 +90,7 @@ class TemplateSelectionDialog(QDialog):
 class BadgerLoopQtGraph(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.series_data = {"2D": [], "3D": [], "Heatmap": []}
+        self.series_data = {"2D": [], "3D": [], "Heatmap": [], "Histogram": []}
         self.settings = QSettings("BadgerLoop", "QtPlotter")
     
         self.dataset = None
@@ -107,6 +107,7 @@ class BadgerLoopQtGraph(QMainWindow):
         }
         
         self.custom_axis_labels = {"bottom": None, "left": None, "top": None, "right": None}
+        self.legend_aliases = {}
         for ax_name, ax_obj in axis_dict.items():
             ax_obj.labelDoubleClicked.connect(self._prompt_custom_axis_label)
         
@@ -221,8 +222,10 @@ class BadgerLoopQtGraph(QMainWindow):
         is_concat = self.file_type == "ConcatenatedCSV"
         is_bl = self.file_type == "BadgerLoop"
         is_csv = self.file_type == "CSV"
+        is_hdf5 = self.file_type == "HDF5" # --- NEW: Register HDF5 ---
         
-        has_sweeps = is_bl or is_multi or is_concat or (is_csv and getattr(self.dataset, 'num_sweeps', 0) > 1)
+        # HDF5 naturally supports groups/sweeps!
+        has_sweeps = is_bl or is_multi or is_concat or is_hdf5 or (is_csv and getattr(self.dataset, 'num_sweeps', 0) > 1)
         can_have_uncerts = is_csv or is_multi or is_concat
         
         self.show_metadata_btn.setVisible(True)
@@ -231,8 +234,8 @@ class BadgerLoopQtGraph(QMainWindow):
         
         if hasattr(self, 'inspect_table_action'):
             self.inspect_table_action.setText("Sweep table" if has_sweeps else "Inspect data table")
-        
-        if is_csv and not has_sweeps:
+            
+        if not has_sweeps:
             self.errorbar_btn.setVisible(False)
             self.errorbar_sigma_edit.setVisible(False)
             self.average_enabled = False 
@@ -270,14 +273,16 @@ class BadgerLoopQtGraph(QMainWindow):
         self.plot()
         
     def _update_uncert_visibility(self):
-        # Allow both standard CSVs and folders to show uncertainty boxes
         show = (self.file_type in ["CSV", "MultiCSV", "ConcatenatedCSV"] and getattr(self, 'csv_uncerts_enabled', False))
-        self.xuncert_label.setVisible(show)
-        self.xuncert.setVisible(show)
+        
+        is_hist = getattr(self, 'plot_mode', '2D') == "Histogram"
+        
+        self.xuncert_label.setVisible(show and not is_hist)
+        self.xuncert.setVisible(show and not is_hist)
         self.yuncert_label.setVisible(show)
         self.yuncert.setVisible(show)
         
-        show_z = show and (getattr(self, 'plot_mode', '2D') != "2D")
+        show_z = show and (getattr(self, 'plot_mode', '2D') in ["3D", "Heatmap"])
         self.zuncert_label.setVisible(show_z)
         self.zuncert.setVisible(show_z)
         
@@ -1026,6 +1031,7 @@ class BadgerLoopQtGraph(QMainWindow):
         self.plot_3d_action = plot_mode_menu.addAction("3D Plot")
         self.plot_3d_action.triggered.connect(lambda: self.set_plot_mode("3D"))
         plot_mode_menu.addAction("Heat Map").triggered.connect(lambda: self.set_plot_mode("Heatmap"))
+        plot_mode_menu.addAction("Histogram").triggered.connect(lambda: self.set_plot_mode("Histogram"))
         
         # Help Menu
         help_menu = menubar.addMenu("Help")
@@ -2106,19 +2112,22 @@ class BadgerLoopQtGraph(QMainWindow):
         
         if aux_cols is None: aux_cols = []
         
-        # --- INTERCEPT FFT MODE ---
-        if getattr(self, 'fft_mode_active', False) and hasattr(self, 'last_plotted_data'):
+        # --- INTERCEPT FFT & HISTOGRAM MODES ---
+        is_fft = getattr(self, 'fft_mode_active', False)
+        is_hist = getattr(self, 'plot_mode', '2D') == "Histogram"
+
+        if (is_fft or is_hist) and hasattr(self, 'last_plotted_data'):
             pkgs = [p for p in self.last_plotted_data.get('packages', []) if p.get("pair_idx", 0) == row and p.get("type") == "standard"]
             if pkgs:
-                x_fft = pkgs[0]['x']
-                y_fft = pkgs[0]['y']
-                # Failsafe aux dict for FFT (aux cols aren't naturally FFT'd, so we return zeros to prevent NoneType)
-                aux_dict = {c: np.zeros_like(x_fft) for c in aux_cols}
+                x_calc = pkgs[0]['x']
+                y_calc = pkgs[0]['y']
+                # Failsafe aux dict (aux cols aren't naturally FFT'd/Binned, so we return zeros to prevent NoneType)
+                aux_dict = {c: np.zeros_like(x_calc) for c in aux_cols}
                 if apply_selection and getattr(self, 'selected_indices', set()):
                     idx = np.array(list(self.selected_indices))
-                    valid_idx = idx[idx < len(x_fft)]
-                    return x_fft[valid_idx], y_fft[valid_idx], {c: v[valid_idx] for c, v in aux_dict.items()}, pair
-                return x_fft, y_fft, aux_dict, pair
+                    valid_idx = idx[idx < len(x_calc)]
+                    return x_calc[valid_idx], y_calc[valid_idx], {c: v[valid_idx] for c, v in aux_dict.items()}, pair
+                return x_calc, y_calc, aux_dict, pair
 
         xidx, yidx = pair['x'], pair['y']
         aux_dict = {}
@@ -2659,7 +2668,7 @@ class BadgerLoopQtGraph(QMainWindow):
         self.aspect_h_edit.textChanged.connect(self._resize_plot_widget)
 
         ld_layout.addSpacing(10)
-        ld_layout.addWidget(QLabel("<b>Data Slicing:</b>"))
+        ld_layout.addWidget(QLabel("<b>Data Slicing & Bins:</b>"))
         slice_grid = QGridLayout()
         self.sweeps_label = QLabel("Sweeps (e.g. 0,2,4 or 0:5):")
         slice_grid.addWidget(self.sweeps_label, 0, 0)
@@ -2668,6 +2677,15 @@ class BadgerLoopQtGraph(QMainWindow):
         slice_grid.addWidget(QLabel("Points (e.g. 100:500):"), 1, 0)
         self.points_edit = QLineEdit("-1")
         slice_grid.addWidget(self.points_edit, 1, 1)
+        
+        # --- NEW: HISTOGRAM BINS ---
+        self.bins_label = QLabel("Histogram Bins:")
+        self.bins_edit = QLineEdit("auto")
+        self.bins_edit.setToolTip("Type 'auto' for smart binning, or a number like '50'")
+        slice_grid.addWidget(self.bins_label, 2, 0)
+        slice_grid.addWidget(self.bins_edit, 2, 1)
+        # ---------------------------
+        
         ld_layout.addLayout(slice_grid)
 
         ld_layout.addSpacing(10)
@@ -2737,7 +2755,22 @@ class BadgerLoopQtGraph(QMainWindow):
         self.show_metadata_btn = button("Show Metadata", self.show_metadata)
         controls.addWidget(self.show_metadata_btn)
         
-        controls.addWidget(button("Toggle Legend", self.toggle_legend))
+        self.toggle_legend_btn = QPushButton("Toggle Legend")
+        self.toggle_legend_btn.setCheckable(True)
+        self.toggle_legend_btn.setChecked(True) # Legend is visible by default
+        self.toggle_legend_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        self.toggle_legend_btn.clicked.connect(self.toggle_legend)
+        controls.addWidget(self.toggle_legend_btn)
+        
+        # --- NEW: HISTOGRAM STATS TOGGLE ---
+        self.toggle_stats_btn = QPushButton("Toggle Histogram Stats")
+        self.toggle_stats_btn.setCheckable(True)
+        self.toggle_stats_btn.setChecked(True)
+        self.toggle_stats_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        self.toggle_stats_btn.setVisible(False) 
+        self.toggle_stats_btn.clicked.connect(self._toggle_hist_stats)
+        controls.addWidget(self.toggle_stats_btn)
+        # -----------------------------------
         
         self.toggle_avg_btn = button("Toggle Averaging", self.toggle_averaging)
         controls.addWidget(self.toggle_avg_btn)
@@ -2757,7 +2790,8 @@ class BadgerLoopQtGraph(QMainWindow):
         controls.addWidget(self.errorbar_sigma_edit)
     
         controls.addSpacing(10)
-        controls.addWidget(QLabel("X column"))
+        self.xcol_label = QLabel("X column")
+        controls.addWidget(self.xcol_label)
         self.xcol = QComboBox()
         controls.addWidget(self.xcol)
         self.xuncert_label = QLabel(" ↳ X Uncertainty")
@@ -2765,7 +2799,8 @@ class BadgerLoopQtGraph(QMainWindow):
         controls.addWidget(self.xuncert_label)
         controls.addWidget(self.xuncert)
     
-        controls.addWidget(QLabel("Y column"))
+        self.ycol_label = QLabel("Y column")
+        controls.addWidget(self.ycol_label)
         self.ycol = QComboBox()
         controls.addWidget(self.ycol)
         self.yuncert_label = QLabel(" ↳ Y Uncertainty")
@@ -3144,6 +3179,7 @@ class BadgerLoopQtGraph(QMainWindow):
         msg.exec()
 
     def set_plot_mode(self, mode):
+        self._is_plotting = False
         if mode == "3D" and not OPENGL_AVAILABLE:
             QMessageBox.warning(self, "3D Not Available", "3D plotting requires OpenGL support.\n\nInstall pyqtgraph with OpenGL enabled.\n\nThis can be done with: pip install PyOpenGL PyOpenGL_accelerate")
             return
@@ -3154,22 +3190,40 @@ class BadgerLoopQtGraph(QMainWindow):
         is_heatmap = (mode == "Heatmap")
         self.heatmap_cmap.setVisible(is_heatmap)
         self.heatmap_cmap_label.setVisible(is_heatmap)
+        self.heatmap_item.setVisible(is_heatmap)
         
-        show_z = (mode != "2D")
+        # --- NEW: UI TOGGLES FOR HISTOGRAM ---
+        is_hist = (mode == "Histogram")
+        
+        # Show/Hide the Stats Button
+        if hasattr(self, 'toggle_stats_btn'): 
+            self.toggle_stats_btn.setVisible(is_hist)
+            if not is_hist and hasattr(self, 'stats_label'):
+                self.stats_label.hide() # Auto-hide the HUD when leaving Histogram mode
+                
+        # Hide X Column
+        if hasattr(self, 'xcol_label'): self.xcol_label.setVisible(not is_hist)
+        self.xcol.setVisible(not is_hist)
+        
+        # Rename Y Column dynamically
+        if hasattr(self, 'ycol_label'):
+            self.ycol_label.setText("Data column" if is_hist else "Y column")
+        # --------------------------------------------
+        
+        show_z = (mode in ["3D", "Heatmap"])
         self.zcol.setVisible(show_z)
         self.zcol_label.setVisible(show_z)
         self.zscale_label.setVisible(show_z)
         self.zscale.setVisible(show_z)
         self.zbase.setVisible(show_z and self.zscale.currentText() == "Log")
         
-        self.heatmap_item.setVisible(is_heatmap)
-        
         if hasattr(self, 'series_data'):
             self._refresh_series_list_ui()
     
-        if mode == "2D": self.plot_layout.setCurrentWidget(self.plot_wrapper)
-        elif mode == "3D": self.plot_layout.setCurrentWidget(self.gl_widget)
-        elif mode == "Heatmap": self.plot_layout.setCurrentWidget(self.plot_wrapper)
+        if mode in ["2D", "Histogram", "Heatmap"]: 
+            self.plot_layout.setCurrentWidget(self.plot_wrapper)
+        elif mode == "3D" and OPENGL_AVAILABLE: 
+            self.plot_layout.setCurrentWidget(self.gl_widget)
         
         if hasattr(self, '_update_uncert_visibility'):
             self._update_uncert_visibility()
@@ -3366,15 +3420,42 @@ class BadgerLoopQtGraph(QMainWindow):
         self.gl_widget.addItem(GLTextItem(pos=[-1.5, 0, 5], text=z_name, font=label_font, color=(255, 255, 255, 255)))
 
     def toggle_legend(self):
-        self.legend_visible = not self.legend_visible
-        self.legend.setVisible(self.legend_visible)
-        self.fit_legend.setVisible(self.legend_visible)
+        self.legend_visible = not getattr(self, 'legend_visible', True)
+        
+        # Safely hide/show the legends if they exist
+        if hasattr(self, 'legend'): self.legend.setVisible(self.legend_visible)
+        if hasattr(self, 'fit_legend'): self.fit_legend.setVisible(self.legend_visible)
+        
+        # Update the button styling
+        if hasattr(self, 'toggle_legend_btn'):
+            self.toggle_legend_btn.setChecked(self.legend_visible)
+            if self.legend_visible:
+                self.toggle_legend_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+            else:
+                self.toggle_legend_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+                
+    def _toggle_hist_stats(self):
+        if self.toggle_stats_btn.isChecked():
+            self.toggle_stats_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+            if self.plot_mode == "Histogram" and hasattr(self, '_last_hist_html'):
+                self.stats_label.setText(self._last_hist_html)
+                self.stats_label.adjustSize()
+                self.stats_label.show()
+                self.stats_label.raise_()
+        else:
+            self.toggle_stats_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+            if self.plot_mode == "Histogram":
+                self.stats_label.hide()
 
     def restore_state(self):
         if geo := self.settings.value("geometry"): self.restoreGeometry(geo)
         
         self.legend_visible = self.settings.value("legend", True, bool)
         self.fit_legend.setVisible(self.legend_visible)
+        saved_aliases_str = self.settings.value("legend_aliases", "")
+        if saved_aliases_str:
+            try: self.legend_aliases = json.loads(saved_aliases_str)
+            except Exception: self.legend_aliases = {}
         self.average_enabled = self.settings.value("average", False, bool)
         self.last_file = self.settings.value("last_file", "")
         self.file_type = self.settings.value("file_type", "BadgerLoop")
@@ -3408,7 +3489,7 @@ class BadgerLoopQtGraph(QMainWindow):
         self.aspect_combo.setCurrentText(self.settings.value("aspect_mode", "Free"))
         self._update_aspect_ui(self.aspect_combo.currentText())
         
-        show_z = (self.plot_mode != "2D")
+        show_z = (self.plot_mode in ["3D", "Heatmap"])
         self.zcol.setVisible(show_z)
         self.zcol_label.setVisible(show_z)
         self.zscale_label.setVisible(show_z)
@@ -3426,7 +3507,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
         if self.plot_mode == "2D": self.plot_layout.setCurrentWidget(self.plot_wrapper)
         elif self.plot_mode == "3D" and OPENGL_AVAILABLE: self.plot_layout.setCurrentWidget(self.gl_widget)
-        elif self.plot_mode == "Heatmap": self.plot_layout.setCurrentWidget(self.plot_widget)
+        elif self.plot_mode == "Heatmap": self.plot_layout.setCurrentWidget(self.plot_wrapper) # <--- FIXED
     
         if self.last_file and os.path.exists(self.last_file):
             try:
@@ -3452,6 +3533,11 @@ class BadgerLoopQtGraph(QMainWindow):
                         self.last_load_opts.get("delimiter", ","),
                         self.last_load_opts.get("has_header", True)
                     )
+                # --- NEW: ROUTE HDF5 FILES PROPERLY ON STARTUP ---
+                elif self.file_type == "HDF5":
+                    from core.data_loader import HDF5Dataset
+                    self.dataset = HDF5Dataset(self.last_file)
+                # -------------------------------------------------
                 else: 
                     if os.path.isdir(self.last_file):
                         raise IsADirectoryError("Expected a BadgerLoop file but got a directory.")
@@ -3472,7 +3558,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 if saved_series_str:
                     try:
                         restored_data = json.loads(saved_series_str)
-                        for mode in ["2D", "3D", "Heatmap"]:
+                        for mode in ["2D", "3D", "Heatmap", "Histogram"]:  # <-- Added Histogram
                             if mode in restored_data and restored_data[mode]:
                                 for pair in restored_data[mode]:
                                     pair['x'] = min(pair.get('x', 0), max_idx)
@@ -3485,9 +3571,9 @@ class BadgerLoopQtGraph(QMainWindow):
                                 restored_data[mode] = [dict(default_pair)]
                         self.series_data = restored_data
                     except Exception:
-                        self.series_data = {"2D": [dict(default_pair)], "3D": [dict(default_pair)], "Heatmap": [dict(default_pair)]}
+                        self.series_data = {"2D": [dict(default_pair)], "3D": [dict(default_pair)], "Heatmap": [dict(default_pair)], "Histogram": [dict(default_pair)]}
                 else:
-                    self.series_data = {"2D": [dict(default_pair)], "3D": [dict(default_pair)], "Heatmap": [dict(default_pair)]}
+                    self.series_data = {"2D": [dict(default_pair)], "3D": [dict(default_pair)], "Heatmap": [dict(default_pair)], "Histogram": [dict(default_pair)]}
                 
                 self.update_file_mode_ui()
                 self.point_size_edit.setText(self.settings.value("point_size", "5"))
@@ -3521,6 +3607,7 @@ class BadgerLoopQtGraph(QMainWindow):
     def closeEvent(self, e):
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("legend", self.legend_visible)
+        self.settings.setValue("legend_aliases", json.dumps(self.legend_aliases))
         self.settings.setValue("last_file", self.last_file)
         self.settings.setValue("file_type", self.file_type)
         # --- NEW: Save the load options (delimiter, file list, etc) ---
@@ -3572,23 +3659,46 @@ class BadgerLoopQtGraph(QMainWindow):
         super().closeEvent(e)
 
     def open_file(self):
-        fname, _ = QFileDialog.getOpenFileName(self, "Open Data File", "", "All supported files (*.txt *.csv);;Text files (*.txt);;CSV files (*.csv);;All files (*)")
+        fname, _ = QFileDialog.getOpenFileName(self, "Open Data File", "", "All supported files (*.txt *.csv *.h5 *.hdf5);;Text files (*.txt);;CSV files (*.csv);;HDF5 files (*.h5 *.hdf5);;All files (*)")
         if not fname: return
 
-        dlg = FileImportDialog(self)
+        # ==========================================
+        # PRE-SCAN THE FILE TO AUTO-DETECT TYPE
+        # ==========================================
+        is_badgerloop_actual = False
+        is_hdf5_actual = False
+        detected_type = "CSV" # Default fallback
+        
+        try:
+            with open(fname, 'rb') as f:
+                header_bytes = f.read(2000)
+                
+                if header_bytes.startswith(b'\x89HDF\r\n\x1a\n'):
+                    is_hdf5_actual = True
+                    detected_type = "HDF5"
+                else:
+                    text_chunk = header_bytes.decode('utf-8', errors='ignore')
+                    if "###OUTPUTS" in text_chunk or "###INPUTS" in text_chunk or "###DATA" in text_chunk:
+                        is_badgerloop_actual = True
+                        detected_type = "BadgerLoop"
+        except Exception: pass
+        # ==========================================
+
+        # Pass the auto-detected type into the dialog!
+        dlg = FileImportDialog(self, detected_type=detected_type)
+        
         if dlg.exec() == QDialog.Accepted:
             opts = dlg.get_options()
-            is_badgerloop_actual = False
-            try:
-                with open(fname, 'r', encoding='utf-8', errors='ignore') as f:
-                    for _ in range(50):
-                        line = f.readline()
-                        if not line: break
-                        if line.startswith("###OUTPUTS") or line.startswith("###INPUTS") or line.startswith("###DATA"):
-                            is_badgerloop_actual = True
-                            break
-            except Exception: pass
+            
+            # --- The Mismatch Shields remain exactly the same! ---
+            if opts["type"] == "HDF5" and not is_hdf5_actual:
+                QMessageBox.critical(self, "Format Mismatch", "You selected 'HDF5', but this file does not appear to be a valid HDF5 binary.\n\nPlease select the correct File Type.")
+                return
                 
+            if opts["type"] != "HDF5" and is_hdf5_actual:
+                QMessageBox.critical(self, "Format Mismatch", "This appears to be an HDF5 binary file, but you selected another format.\n\nPlease open the file again and select 'HDF5' as the File Type.")
+                return
+
             if opts["type"] == "CSV" and is_badgerloop_actual:
                 QMessageBox.critical(self, "Format Mismatch", "You selected 'CSV', but this appears to be a native BadgerLoop file.\n\nPlease open the file again and select 'BadgerLoop' as the File Type.")
                 return
@@ -3838,6 +3948,7 @@ class BadgerLoopQtGraph(QMainWindow):
             if hasattr(self, 'func_details_btn'): self.func_details_btn.setVisible(False)
             if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(False)
         
+        self.legend_aliases.clear()
         self.populate_columns()
         max_idx = len(dataset.column_names) - 1
         default_pair = {
@@ -3847,7 +3958,7 @@ class BadgerLoopQtGraph(QMainWindow):
             "z_name": dataset.column_names.get(min(2, max_idx), "Z")
         }
         
-        for mode in ["2D", "3D", "Heatmap"]:
+        for mode in ["2D", "3D", "Heatmap", "Histogram"]:  # <-- Added Histogram here
             if getattr(self, 'series_data', None) and self.series_data.get(mode):
                 for pair in self.series_data[mode]:
                     pair['x'] = min(pair.get('x', 0), max_idx)
@@ -3914,7 +4025,23 @@ class BadgerLoopQtGraph(QMainWindow):
         new_label, ok = QInputDialog.getText(self, "Custom Axis Label", f"Enter custom text for the '{orientation.capitalize()}' axis label:\n(Leave blank to revert to default column name)", QLineEdit.Normal, current_label)
         if ok:
             self.custom_axis_labels[orientation] = new_label.strip() if new_label.strip() else None
-            self.plot() 
+            self.plot()
+            
+    def _prompt_legend_rename(self, sig_key, current_name):
+        from PyQt5.QtWidgets import QInputDialog, QLineEdit
+        new_name, ok = QInputDialog.getText(
+            self, 
+            "Rename Legend Entry", 
+            "Enter custom name for this trace:\n(Leave blank to revert to auto-generated name)", 
+            QLineEdit.Normal, 
+            current_name
+        )
+        if ok:
+            if new_name.strip():
+                self.legend_aliases[sig_key] = new_name.strip()
+            else:
+                self.legend_aliases.pop(sig_key, None)
+            self.plot() # Instantly redraw to apply the new name
 
     def _apply_axis_fonts(self):
         try:
@@ -4129,17 +4256,26 @@ class BadgerLoopQtGraph(QMainWindow):
         else: CopyableErrorDialog("Plotting Error", "An error occurred while mathematically processing the data:", err_msg, self).exec()
 
     def _draw_2d(self, packages, show_legend):
+        # --- NEW: Route Histogram data to its dedicated renderer ---
+        if getattr(self, 'plot_mode', '2D') == "Histogram":
+            self._draw_histogram(packages, show_legend)
+            return
+        # -----------------------------------------------------------
         try:
             if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
-            dummy_arr = np.array([0.0], dtype=np.float64)
-            for c in self.curve_pool: 
-                c.setData(x=dummy_arr, y=dummy_arr)
+            dummy_arr = np.array([0,0], dtype=np.float64)
+            
+            # 1. Clean up standard curves
+            for c in self.curve_pool:
+                if type(c).__name__ == "PlotCurveItem":
+                    c.setData(x=dummy_arr, y=dummy_arr)
                 c.setVisible(False)
                 try: self.plot_widget.removeItem(c)
                 except: pass
                 try: self.vb_right.removeItem(c)
                 except: pass
                 
+            # 2. Clean up scatter points
             for s in self.scatter_pool: 
                 s.setData(x=dummy_arr, y=dummy_arr)
                 s.setVisible(False)
@@ -4148,6 +4284,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 try: self.vb_right.removeItem(s)
                 except: pass
                 
+            # 3. Clean up error bars
             for eb in self.errorbar_pool + self.avg_error_pool: 
                 eb.setData(x=dummy_arr, y=dummy_arr, height=dummy_arr, width=dummy_arr)
                 eb.setVisible(False)
@@ -4155,6 +4292,13 @@ class BadgerLoopQtGraph(QMainWindow):
                 except: pass
                 try: self.vb_right.removeItem(eb)
                 except: pass
+                
+            # 4. NEW: Safely wipe histogram bars if switching modes
+            if hasattr(self, 'bar_pool'):
+                for b in self.bar_pool:
+                    try: self.plot_widget.removeItem(b)
+                    except: pass
+                self.bar_pool.clear()
                 
             self.legend.clear()
             self.fit_legend.clear()
@@ -4276,27 +4420,57 @@ class BadgerLoopQtGraph(QMainWindow):
             
             graphtype = self.graphtype.currentText()
             curve_idx, scatter_idx, err_idx = 0, 0, 0
-            num_active_pairs = len(self.series_data.get("2D", []))
+            
+            # Context checks for smart naming
+            active_pairs = [p for p in self.series_data.get("2D", []) if p.get('visible', True)]
+            num_active_pairs = len(active_pairs)
             added_to_legend = set()
             
             for pkg in packages:
-                i, sw, pair_idx = pkg["i"], pkg["sw"], pkg.get("pair_idx", 0)
+                i = pkg.get("i", 0)
+                sw = pkg.get("sw", "All")
+                pair_idx = pkg.get("pair_idx", 0)
+                
                 y_name = pkg.get("y_name", "Y")
                 cmap_name = pkg.get("cmap_name", "Blues")
                 cmap = matplotlib.colormaps.get_cmap(cmap_name)
                 axis_side = pkg.get("axis", "L")
+                pkg_type = pkg.get("type", "standard")
                 
                 intensity = 0.8 if total_plotted_sw <= 1 else 0.4 + 0.6 * (i / max(1, total_plotted_sw - 1))
                 rgba = cmap(intensity)
                 line_color = (int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), 255)
                 
-                legend_name = f"[P{pair_idx+1}] {y_name}" if num_active_pairs > 1 else y_name
-                if self.file_type == "BadgerLoop": 
-                    legend_name += f" (Sweeps)" if total_plotted_sw > 15 else f" (Sw {sw})"
+                # --- SMART AUTO-NAMING ENGINE ---
+                base_name = y_name
+                
+                if num_active_pairs > 1:
+                    base_name = f"[P{pair_idx+1}] {base_name}"
+                    
+                if pkg_type == "average":
+                    base_name += " (Average)"
+                elif total_plotted_sw > 1:
+                    base_name += f" (Sweep {sw})"
+                    
                 if axis_side == "R":
-                    legend_name += " [Top/Right]"
+                    base_name += " [R]"
+                    
+                # Generate a unique mathematical signature for this specific line
+                sig_key = f"{pair_idx}_{sw}_{pkg_type}_{axis_side}"
+                
+                # Pull from the memory bank if the user overrode it
+                legend_name = self.legend_aliases.get(sig_key, base_name)
+                # --------------------------------
                 
                 target_vb = self.vb_right if axis_side == "R" else self.plot_widget
+                
+                # Helper to bind the double click to the specific pyqtgraph label
+                def bind_double_click(label_item, key, current):
+                    def on_click(ev):
+                        if ev.double():
+                            self._prompt_legend_rename(key, current)
+                            ev.accept()
+                    label_item.mouseClickEvent = on_click
                 
                 if pkg["type"] == "average":
                     if scatter_idx >= len(self.scatter_pool):
@@ -4311,10 +4485,12 @@ class BadgerLoopQtGraph(QMainWindow):
                                     size=pt_size + 3, pen=pg.mkPen(None), brush=pg.mkBrush(line_color))
                     scatter.setVisible(True)
                     
-                    avg_legend = legend_name + " Avg"
-                    if show_legend and avg_legend not in added_to_legend:
-                        self.legend.addItem(scatter, avg_legend)
-                        added_to_legend.add(avg_legend)
+                    if show_legend and legend_name not in added_to_legend:
+                        self.legend.addItem(scatter, legend_name)
+                        added_to_legend.add(legend_name)
+                        # Inject the click event into the newly created label
+                        sample, label_item = self.legend.items[-1]
+                        bind_double_click(label_item, sig_key, legend_name)
                         
                     scatter_idx += 1
                     
@@ -4330,7 +4506,7 @@ class BadgerLoopQtGraph(QMainWindow):
                                          pen=pg.mkPen(line_color, width=2))
                         err_item.setVisible(True)
                         err_idx += 1
-                        
+                    
                 elif pkg["type"] == "standard":
                     if graphtype in ["Line", "FFT (Spectrum)"]:
                         if curve_idx >= len(self.curve_pool):
@@ -4346,6 +4522,8 @@ class BadgerLoopQtGraph(QMainWindow):
                             if total_plotted_sw <= 15 or legend_name not in added_to_legend:
                                 self.legend.addItem(curve, legend_name)
                                 added_to_legend.add(legend_name)
+                                sample, label_item = self.legend.items[-1]
+                                bind_double_click(label_item, sig_key, legend_name)
                                 
                         curve_idx += 1
                     else:
@@ -4362,6 +4540,8 @@ class BadgerLoopQtGraph(QMainWindow):
                             if total_plotted_sw <= 15 or legend_name not in added_to_legend:
                                 self.legend.addItem(scatter, legend_name)
                                 added_to_legend.add(legend_name)
+                                sample, label_item = self.legend.items[-1]
+                                bind_double_click(label_item, sig_key, legend_name)
                                 
                         scatter_idx += 1
 
@@ -4392,7 +4572,7 @@ class BadgerLoopQtGraph(QMainWindow):
             self.vb_right.autoRange()
 
             # =========================================================================
-            # NEW FIX: ALWAYS RESTORE SELECTION TOOLS TO THE TOP LAYER AFTER REDRAWING
+            # FIX: ALWAYS RESTORE SELECTION TOOLS TO THE TOP LAYER AFTER REDRAWING
             # =========================================================================
             try:
                 self.plot_widget.removeItem(self.selection_curve)
@@ -4419,6 +4599,159 @@ class BadgerLoopQtGraph(QMainWindow):
             import traceback
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Rendering Error", f"A fatal error occurred while drawing the 2D plot.\n\n{e}\n\n{traceback.format_exc()}")
+        finally:
+            self._is_plotting = False
+            
+    def _draw_histogram(self, packages, show_legend=True):
+        import pyqtgraph as pg
+        import numpy as np
+        import matplotlib
+        
+        try:
+            if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
+            
+            # 1. Safely clear old lines, scatters, error bars
+            dummy_arr = np.array([], dtype=np.float64)
+            for pool_name in ['curve_pool', 'scatter_pool']:
+                for item in getattr(self, pool_name, []):
+                    if hasattr(item, 'setData'): item.setData(x=dummy_arr, y=dummy_arr)
+                    item.setVisible(False)
+                    try: self.plot_widget.removeItem(item)
+                    except: pass
+                    
+            for eb in getattr(self, 'errorbar_pool', []) + getattr(self, 'avg_error_pool', []):
+                if hasattr(eb, 'setData'): eb.setData(x=dummy_arr, y=dummy_arr, height=dummy_arr, width=dummy_arr)
+                eb.setVisible(False)
+                try: self.plot_widget.removeItem(eb)
+                except: pass
+                
+            # 2. Clear previous histogram bars
+            if not hasattr(self, 'bar_pool'): self.bar_pool = []
+            for b in self.bar_pool:
+                try: self.plot_widget.removeItem(b)
+                except: pass
+            self.bar_pool.clear()
+            # ---> NEW: UNLOCK THE VIEWBOX (Fixes cropping) <---
+            self.plot_widget.getViewBox().setLimits(xMin=-np.inf, xMax=np.inf, yMin=-np.inf, yMax=np.inf)
+            self.plot_widget.enableAutoRange(axis='xy', enable=True)
+            # --------------------------------------------------
+            
+            self.legend.clear()
+            self.fit_legend.clear()
+            self.heatmap_image_item.setVisible(False)
+            self.heatmap_item.setVisible(False)
+            
+            added_to_legend = set()
+            
+            # Configure Axes
+            self.plot_widget.getAxis('bottom').setLabel("Bins")
+            self.plot_widget.getAxis('left').setLabel("Counts")
+            self.plot_widget.getAxis('right').hide()
+            self.plot_widget.getAxis('top').hide()
+            self.plot_widget.getAxis('bottom').set_custom_log(False, 10.0)
+            self.plot_widget.getAxis('left').set_custom_log(False, 10.0)
+            
+            # ---> NEW: FORCE DISABLE LOG MODE TO PREVENT BARGRAPHITEM CRASHES <---
+            self.plot_widget.setLogMode(x=False, y=False)
+            # ---------------------------------------------------------------------
+            
+            self.last_plotted_data = {'mode': 'Histogram', 'packages': []}
+    
+            # 3. Draw the Distributions
+            for pkg in packages:
+                i = pkg.get("i", 0)
+                sw = pkg.get("sw", "All")
+                pair_idx = pkg.get("pair_idx", 0)
+                y_name = pkg.get("y_name", "Y")
+                axis_side = pkg.get("axis", "L")
+                
+                counts = pkg.get("counts", [])
+                edges = pkg.get("bin_edges", [])
+                if len(counts) == 0: continue
+                
+                # --- REVERT BACK TO CENTERS AND WIDTHS ---
+                centers = (edges[:-1] + edges[1:]) / 2.0
+                widths = edges[1:] - edges[:-1]
+                # -----------------------------------------
+                
+                # Colors
+                cmap_name = pkg.get("cmap_name", "Blues")
+                cmap = matplotlib.colormaps.get_cmap(cmap_name)
+                rgba = cmap(0.5) 
+                border_rgba = cmap(0.9) 
+                
+                fill_color = (int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), int(rgba[3]*255))
+                border_color = (int(border_rgba[0]*255), int(border_rgba[1]*255), int(border_rgba[2]*255), 255)
+                
+                # Draw the bars
+                bg = pg.BarGraphItem(x=centers, height=counts, width=widths, brush=pg.mkBrush(fill_color), pen=pg.mkPen(border_color, width=1.5))
+                self.plot_widget.addItem(bg)
+                self.bar_pool.append(bg)
+                
+                # 4. Smart Legend Logic
+                sig_key = f"{pair_idx}_{sw}_histogram_{axis_side}"
+                base_name = f"{y_name} Distribution"
+                if sw != "All": base_name += f" (Sw {sw})"
+                
+                legend_name = self.legend_aliases.get(sig_key, base_name)
+                
+                if show_legend and legend_name not in added_to_legend:
+                    proxy_scatter = pg.ScatterPlotItem(pen=pg.mkPen(border_color, width=2), brush=pg.mkBrush(fill_color), size=12, symbol='s')
+                    self.legend.addItem(proxy_scatter, legend_name)
+                    added_to_legend.add(legend_name)
+                    
+                    sample, label_item = self.legend.items[-1]
+                    def bind_double_click(label, key, current):
+                        def on_click(ev):
+                            if ev.double():
+                                self._prompt_legend_rename(key, current)
+                                ev.accept()
+                        label.mouseClickEvent = on_click
+                    bind_double_click(label_item, sig_key, legend_name)
+                    
+                # 5. Connect to Gaussian Fitter
+                self.last_plotted_data['packages'].append({
+                    "type": "standard", 
+                    "pair_idx": pair_idx,
+                    "x": centers,
+                    "y": counts,
+                    "x_name": f"Binned {y_name}",
+                    "y_name": "Counts",
+                    "axis": axis_side
+                })
+                
+                # --- NEW: RENDER THE STATS HUD ---
+                stats = pkg.get("stats", {})
+                if stats and hasattr(self, 'toggle_stats_btn') and self.toggle_stats_btn.isChecked():
+                    # Calculate the mode visually from the highest bin
+                    mode_idx = np.argmax(counts)
+                    mode_val = centers[mode_idx]
+                    
+                    html = f"<b style='color: #0055ff; font-size: 14px;'>{y_name} Distribution</b><br><hr style='border: 0; border-top: 1px solid #ccc; margin: 4px 0;'>"
+                    html += f"<b>Count (N):</b>&nbsp;&nbsp;&nbsp;&nbsp;{stats['n']}<br>"
+                    html += f"<b>Mean (&mu;):</b>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{stats['mean']:.5g}<br>"
+                    html += f"<b>Median:</b>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{stats['median']:.5g}<br>"
+                    html += f"<b>Mode (Bin):</b>&nbsp;&nbsp;&nbsp;{mode_val:.5g}<br>"
+                    html += f"<b>Std Dev (&sigma;):</b>&nbsp;&nbsp;{stats['std']:.5g}<br>"
+                    html += f"<b>Range:</b>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{stats['min']:.5g} to {stats['max']:.5g}<br>"
+                    html += f"<b>Skewness:</b>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{stats['skew']:.5g}<br>"
+                    html += f"<b>Kurtosis:</b>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{stats['kurt']:.5g}"
+                    
+                    self._last_hist_html = html
+                    self.stats_label.setText(html)
+                    self.stats_label.adjustSize()
+                    if not self.stats_label.isVisible():
+                        self.stats_label.move(15, 15)
+                    self.stats_label.show()
+                    self.stats_label.raise_()
+                # ---------------------------------
+                
+            self.plot_widget.getViewBox().autoRange(padding=0.1)
+            
+        except Exception as e:
+            import traceback
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Rendering Error", f"A fatal error occurred while drawing the Histogram.\n\n{e}\n\n{traceback.format_exc()}")
         finally:
             self._is_plotting = False
 
