@@ -56,7 +56,8 @@ class CopyableErrorDialog(QDialog):
 
 
 class FileImportDialog(QDialog):
-    def __init__(self, parent=None):
+    # --- NEW: Added detected_type parameter ---
+    def __init__(self, parent=None, detected_type="CSV"):
         super().__init__(parent)
         self.setWindowTitle("Import Data File")
         
@@ -64,11 +65,17 @@ class FileImportDialog(QDialog):
         
         type_form = QFormLayout()
         self.file_type = QComboBox()
-        self.file_type.addItems(["BadgerLoop", "CSV"])
+        self.file_type.addItems(["BadgerLoop", "CSV", "HDF5"])
         
-        if not BADGERLOOP_AVAILABLE:
-            self.file_type.model().item(0).setEnabled(False)
-            self.file_type.setCurrentIndex(1)
+        if not globals().get('BADGERLOOP_AVAILABLE', True):
+            self.file_type.model().item(0).setEnabled(False) 
+            self.file_type.setCurrentIndex(1) 
+            
+        # --- NEW: Set the dropdown to the auto-detected type ---
+        idx = self.file_type.findText(detected_type)
+        if idx >= 0 and self.file_type.model().item(idx).isEnabled():
+            self.file_type.setCurrentIndex(idx)
+        # -------------------------------------------------------
             
         type_form.addRow("File Type:", self.file_type)
         layout.addLayout(type_form)
