@@ -158,6 +158,90 @@ class PlotWorkerThread(QThread):
                             
                 self.progress.emit(100, "Drawing Plot...")
                 self.finished_2d.emit(packages, True)
+                
+            # ============================================================
+            # HISTOGRAM MODE
+            # ============================================================
+            elif mode == "Histogram":
+                packages = []
+                cmaps = ['Blues', 'Oranges', 'Greens', 'Reds', 'Purples', 'Greys']
+                
+                # Fetch bins parameter (passed from the new UI box)
+                bin_input = p.get("bins", "auto")
+                try: bins = int(bin_input)
+                except ValueError: bins = "auto"
+                
+                for pair_idx, pair in enumerate(active_series):
+                    if not pair.get("visible", True): continue
+                    cmap_name = cmaps[pair_idx % len(cmaps)]
+                    
+                    self.progress.emit(20, f"Aggregating data for {pair['y_name']}...")
+                    
+                    # Fetch all sweeps for this Y variable
+                    agg_y = []
+                    for sw in sweeps:
+                        # Catch all returned variables in a tuple, then extract index 1 (the Y array)
+                        res = get_fast_xyz(sw, pair)
+                        y = res[1] 
+                        agg_y.append(np.asarray(y, dtype=np.float64))
+                        
+                    if not agg_y: continue
+                    y_all = np.concatenate(agg_y)
+                    
+                    # Apply log scaling if requested
+                    if ylog:
+                        mask = y_all > 0
+                        y_all = np.log(y_all[mask]) / np.log(ybase)
+                        
+                    y_valid = y_all[np.isfinite(y_all)]
+                    if len(y_valid) == 0: continue
+                    
+                    self.progress.emit(70, f"Calculating distribution for {pair.get('y_name', 'Y')}...")
+                    
+                    import scipy.stats as sp_stats
+                    
+                    stat_n = len(y_valid)
+                    stat_mean = float(np.mean(y_valid))
+                    stat_median = float(np.median(y_valid))
+                    stat_std = float(np.std(y_valid))
+                    stat_min = float(np.min(y_valid))
+                    stat_max = float(np.max(y_valid))
+                    
+                    # Fallbacks in case the variance is strictly zero
+                    try: stat_skew = float(sp_stats.skew(y_valid))
+                    except: stat_skew = 0.0
+                    try: stat_kurt = float(sp_stats.kurtosis(y_valid))
+                    except: stat_kurt = 0.0
+
+                    # --- NEW: Safe Binning Engine ---
+                    if np.ptp(y_valid) == 0:
+                        safe_bins = 10
+                    else:
+                        safe_bins = bins
+                        
+                    try:
+                        counts, bin_edges = np.histogram(y_valid, bins=safe_bins)
+                    except Exception:
+                        counts, bin_edges = np.histogram(y_valid, bins=50)
+                    # --------------------------------
+                    
+                    # Package it for the renderer
+                    packages.append({
+                        "type": "histogram",
+                        "pair_idx": pair_idx,
+                        "y_name": pair.get("y_name", "Y"),
+                        "counts": counts.astype(np.float64), 
+                        "bin_edges": bin_edges.astype(np.float64), 
+                        "cmap_name": cmap_name,
+                        "axis": pair.get("axis", "L"),
+                        "stats": {
+                            "n": stat_n, "mean": stat_mean, "median": stat_median, "std": stat_std,
+                            "min": stat_min, "max": stat_max, "skew": stat_skew, "kurt": stat_kurt
+                        }
+                    })
+                    
+                self.progress.emit(100, "Drawing Histogram...")
+                self.finished_2d.emit(packages, True) # We can reuse the 2D signal!
 
             # ============================================================
             # 3D MODE
@@ -190,6 +274,16 @@ class PlotWorkerThread(QThread):
                     x_arrs, y_arrs, z_arrs = x_arrs[valid], y_arrs[valid], z_arrs[valid]
                     
                     if len(x_arrs) == 0: raise ValueError("No valid data points left!")
+
+                    # ---> NEW: THE ANTI-HANG SHIELD FOR 3D SURFACES <---
+                    MAX_SURFACE_POINTS = 50000
+                    if len(x_arrs) > MAX_SURFACE_POINTS:
+                        self.progress.emit(55, "Downsampling for fast meshing...")
+                        stride = max(1, len(x_arrs) // MAX_SURFACE_POINTS)
+                        x_arrs = x_arrs[::stride]
+                        y_arrs = y_arrs[::stride]
+                        z_arrs = z_arrs[::stride]
+                    # ---------------------------------------------------
                     
                     mins = np.array([x_arrs.min(), y_arrs.min(), z_arrs.min()])
                     maxs = np.array([x_arrs.max(), y_arrs.max(), z_arrs.max()])
@@ -247,7 +341,7 @@ class PlotWorkerThread(QThread):
                 self.finished_3d.emit(all_pts_raw, (mins, maxs))
 
             # ============================================================
-            # HEATMAP MODE
+            # HEATMAP MODE (Defaults to the first pair in the list)
             # ============================================================
             elif mode == "Heatmap":
                 pair = active_series[0]
@@ -280,12 +374,23 @@ class PlotWorkerThread(QThread):
                 
                 if len(x_arrs) == 0:
                     raise ValueError("No valid data points left after log scale filtering!")
+
+                # ---> NEW: THE ANTI-HANG SHIELD <---
+                MAX_HEATMAP_POINTS = 50000
+                if len(x_arrs) > MAX_HEATMAP_POINTS:
+                    self.progress.emit(55, "Downsampling for fast meshing...")
+                    stride = max(1, len(x_arrs) // MAX_HEATMAP_POINTS)
+                    x_arrs = x_arrs[::stride]
+                    y_arrs = y_arrs[::stride]
+                    z_arrs = z_arrs[::stride]
+                # -----------------------------------
                     
                 self.progress.emit(60, "Meshing Data Grid...")
                 
                 import scipy.interpolate
                 grid_x, grid_y = np.mgrid[x_arrs.min():x_arrs.max():200j, y_arrs.min():y_arrs.max():200j]
                 
+                # --- CRITICAL FIX: GRACEFULLY INTERCEPT QHULL ERRORS ---
                 try:
                     grid_z = scipy.interpolate.griddata((x_arrs, y_arrs), z_arrs, (grid_x, grid_y), method='linear')
                 except Exception as e:
