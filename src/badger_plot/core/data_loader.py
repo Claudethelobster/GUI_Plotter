@@ -6,6 +6,7 @@ import builtins
 import traceback
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
+import h5py
 
 # --- SAFE IMPORT FOR NATIVE BADGERLOOP FILES ---
 try:
@@ -251,7 +252,6 @@ class DataLoaderThread(QThread):
         try:
             self.progress.emit(10, "Initializing...")
             
-            # Use .get() to prevent crashes if a key is missing
             opts_type = self.opts.get("type", "BadgerLoop")
             
             if opts_type in ["CSV", "ConcatenatedCSV"]:
@@ -274,6 +274,12 @@ class DataLoaderThread(QThread):
                     self.opts.get("has_header", True)
                 )
                 
+            # --- NEW: HDF5 ROUTING ---
+            elif opts_type == "HDF5":
+                self.progress.emit(30, "Parsing HDF5 binary...")
+                ds = HDF5Dataset(self.filename, self.progress.emit)
+            # -------------------------
+                
             else:
                 self.progress.emit(30, "Parsing BadgerLoop binary...")
                 ds = Dataset(self.filename) 
@@ -283,5 +289,75 @@ class DataLoaderThread(QThread):
             
         except Exception as e:
             import traceback
-            print(traceback.format_exc()) # Print to console for debugging
+            print(traceback.format_exc())
             self.error.emit(str(e))
+
+
+class HDF5Dataset:
+    def __init__(self, fname, progress_callback=None):
+        self.filename = fname
+        self.column_names = {}
+        self.notes = ""
+        self.sweeps = []
+        
+        if progress_callback:
+            progress_callback(10, "Opening HDF5 File...")
+            
+        with h5py.File(fname, 'r') as f:
+            # 1. Extract Global Metadata (Attributes)
+            notes_list = []
+            for key, val in f.attrs.items():
+                notes_list.append(f"{key}: {val}")
+            self.notes = "\n".join(notes_list)
+            
+            # 2. Intelligently discover groups and datasets
+            sweep_dict = {} 
+            
+            def find_datasets(name, obj):
+                if isinstance(obj, h5py.Dataset) and obj.ndim == 1:
+                    # Get the parent folder name (or '/' if it's at the root)
+                    parent = obj.parent.name
+                    if parent not in sweep_dict:
+                        sweep_dict[parent] = {}
+                    # Load the binary array directly into RAM
+                    sweep_dict[parent][name.split('/')[-1]] = obj[:] 
+                    
+            f.visititems(find_datasets)
+            
+            if not sweep_dict:
+                raise ValueError("No 1D data arrays found in this HDF5 file.")
+                
+            if progress_callback:
+                progress_callback(50, "Formatting Sweeps...")
+                
+            # 3. Use the first group to establish the column names
+            first_group = list(sweep_dict.keys())[0]
+            col_keys = list(sweep_dict[first_group].keys())
+            for i, col_name in enumerate(col_keys):
+                self.column_names[i] = col_name
+                
+            # 4. Build a CSVSweep object for each HDF5 Group
+            self.num_points = 0
+            for i, (path, col_data) in enumerate(sweep_dict.items()):
+                length = len(col_data[col_keys[0]])
+                matrix = np.zeros((length, len(col_keys)), dtype=np.float64)
+                
+                for col_idx, key in enumerate(col_keys):
+                    if key in col_data:
+                        matrix[:, col_idx] = col_data[key]
+                        
+                sweep_name = path.strip('/') if path != '/' else f"Sweep {i}"
+                from core.data_loader import CSVSweep # Ensure we use the container
+                self.sweeps.append(CSVSweep(matrix, name=sweep_name))
+                self.num_points += length
+                
+        self.num_sweeps = len(self.sweeps)
+        if self.num_sweeps > 0:
+            self.data = self.sweeps[0].data # Fallback for legacy 1D operations
+            
+        self.num_inputs = len(self.column_names)
+        self.num_outputs = 0
+        self.name = os.path.basename(fname)
+        
+        if progress_callback:
+            progress_callback(100, "Done")
