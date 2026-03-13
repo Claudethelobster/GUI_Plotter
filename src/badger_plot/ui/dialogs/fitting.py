@@ -479,7 +479,12 @@ class CustomFitDialog(QDialog):
             sorted_aux[c] = arr[sort_idx]
         # -----------------
         
-        env = {"np": np, "e": np.e, "pi": np.pi, "x": x_sorted, "data_dict": sorted_aux}
+        def norm_func(v):
+            arr = np.asarray(v, dtype=np.float64)
+            m = np.max(arr)
+            return arr / m if m != 0 else arr
+            
+        env = {"np": np, "e": np.e, "pi": np.pi, "x": x_sorted, "data_dict": sorted_aux, "norm": norm_func}
         for i, p in enumerate(self.parameters): env[p] = param_vals[i]
         
         try:
@@ -523,8 +528,13 @@ class CustomFitDialog(QDialog):
             if controls["mode"].currentText() == "Auto":
                 old_vals.append(val)
 
+        def norm_func(v):
+            arr = np.asarray(v, dtype=np.float64)
+            m = np.max(arr)
+            return arr / m if m != 0 else arr
+
         def custom_model(x_val, *args):
-            env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "data_dict": aux_calc}
+            env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "data_dict": aux_calc, "norm": norm_func}
             for i, p in enumerate(self.parameters): env[p] = args[i]
             with np.errstate(all='ignore'):
                 res_arr = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
@@ -634,7 +644,8 @@ class CustomFitDialog(QDialog):
         except ValueError: return False, ""
 
         py_equation = py_equation.replace('^', '**')
-        math_funcs = ['arcsinh','arccosh','arctanh','arcsin','arccos','arctan','sinh','cosh','tanh','sin','cos','tan']
+        # Add 'abs' to the end of this list:
+        math_funcs = ['arcsinh','arccosh','arctanh','arcsin','arccos','arctan','sinh','cosh','tanh','sin','cos','tan', 'abs']
         for f in math_funcs:
             py_equation = re.sub(r'\b' + f + r'\s*\(', 'np.'+f+'(', py_equation, flags=re.IGNORECASE)
         py_equation = re.sub(r'\blog_?10\s*\(', 'np.log10(', py_equation, flags=re.IGNORECASE)
@@ -643,8 +654,13 @@ class CustomFitDialog(QDialog):
         py_equation = re.sub(r'\bln\s*\(', 'np.log(', py_equation, flags=re.IGNORECASE)
         py_equation = re.sub(r'\bexp\s*\(', 'np.exp(', py_equation, flags=re.IGNORECASE)
 
+        def norm_func(v):
+            arr = np.asarray(v, dtype=np.float64)
+            m = np.max(arr)
+            return arr / m if m != 0 else arr
+
         try:
-            env = {"np": np, "data_dict": dummy_dict, "e": np.e, "pi": np.pi, "x": np.ones(1)}
+            env = {"np": np, "data_dict": dummy_dict, "e": np.e, "pi": np.pi, "x": np.ones(1), "norm": norm_func}
             for p in self.parameters: env[p] = 1.0 # Feed dummy values for validation only
             with np.errstate(all='ignore'):
                 eval(py_equation, {"__builtins__": {}}, env)
@@ -705,7 +721,8 @@ class CustomFitDialog(QDialog):
             func = re.sub(r'_?([0-9]+)', r"<sub style='font-size:12px;'>\1</sub>", func)
             funcs.append(f"<span style='font-style: normal; font-weight: bold; color: #222;'>{func}</span>")
             return f"__FUNC{len(funcs)-1}__"
-        html_text = re.sub(r'\b(arcsin|arccos|arctan|arcsinh|arccosh|arctanh|sinh|cosh|tanh|sin|cos|tan|ln|log(?:_?[0-9]+)?|exp)\b', func_repl, html_text, flags=re.IGNORECASE)
+        # Add |abs|norm to the end of this regex:
+        html_text = re.sub(r'\b(arcsin|arccos|arctan|arcsinh|arccosh|arctanh|sinh|cosh|tanh|sin|cos|tan|ln|log(?:_?[0-9]+)?|exp|abs|norm)\b', func_repl, html_text, flags=re.IGNORECASE)
 
         def tokenize_to_horizontal(text, f_size):
             parts = re.split(r'(__COL\d+__|__FUNC\d+__|__PAREN\d+__|__EXP\d+__|__CONST\d+__|__PARAM\d+__|__XVAR\d+__)', text)
@@ -786,13 +803,17 @@ class CustomFitDialog(QDialog):
         self.optimize_btn.setEnabled(False)
         QApplication.processEvents()
 
+        def norm_func(v):
+            arr = np.asarray(v, dtype=np.float64)
+            m = np.max(arr)
+            return arr / m if m != 0 else arr
+
         def objective(params):
-            env = {"np": np, "e": np.e, "pi": np.pi, "x": x, "data_dict": safe_aux}
+            env = {"np": np, "e": np.e, "pi": np.pi, "x": x, "data_dict": safe_aux, "norm": norm_func}
             for i, p in enumerate(self.parameters): env[p] = params[i]
             try:
                 y_pred = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
                 if y_pred.ndim == 0: y_pred = np.full_like(x, float(y_pred))
-                # Return Sum of Squared Errors
                 return np.sum((y - y_pred)**2)
             except:
                 return np.inf
