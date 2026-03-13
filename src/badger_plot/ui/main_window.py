@@ -11,7 +11,8 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QLineEdit, QComboBox, QStackedLayout, 
     QMessageBox, QProgressDialog, QListWidget, QAction, QGridLayout, 
-    QButtonGroup, QApplication, QDialog, QFormLayout, QTextEdit
+    QButtonGroup, QApplication, QDialog, QFormLayout, QTextEdit,
+    QCheckBox, QTabWidget, QFontComboBox, QSlider
 )
 
 # Core imports
@@ -86,6 +87,109 @@ class TemplateSelectionDialog(QDialog):
         
     def get_selected_signature(self):
         return self.sig_mapping[self.list_widget.currentRow()]
+    
+class RichTextAxisLabelDialog(QDialog):
+    def __init__(self, orientation, current_raw_text, main_window):
+        super().__init__(main_window)
+        self.setWindowTitle(f"Edit {orientation.capitalize()} Axis Label")
+        self.setMinimumWidth(450)
+        self.main_window = main_window
+        self.parsed_html = current_raw_text
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("<b>Enter Custom Axis Label:</b>"))
+        layout.addWidget(QLabel("<i>Tip: Use ^ for superscripts (m/s^2), _ for subscripts (x_0), and {alpha} for Greek.</i>"))
+
+        input_lay = QHBoxLayout()
+        self.input_edit = QLineEdit(current_raw_text)
+        self.input_edit.textChanged.connect(self.update_preview)
+        input_lay.addWidget(self.input_edit)
+
+        self.const_btn = QPushButton("✨ Insert Constant")
+        self.const_btn.clicked.connect(self.open_constants)
+        input_lay.addWidget(self.const_btn)
+        layout.addLayout(input_lay)
+
+        layout.addSpacing(10)
+        layout.addWidget(QLabel("<b>Live Preview:</b>"))
+
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignCenter)
+
+        # --- Pull exact font & color from layout settings ---
+        font_family = main_window.font_family_combo.currentFont().family()
+        try: label_size = int(main_window.label_fontsize_edit.text())
+        except ValueError: label_size = 14
+        
+        bg_color = main_window.bg_color_combo.currentText()
+        if bg_color == "Black":
+            box_bg, text_color = "#222", "white"
+        else:
+            box_bg, text_color = "white", "black"
+
+        self.preview_label.setStyleSheet(f"background-color: {box_bg}; color: {text_color}; border: 1px solid #aaa; padding: 15px;")
+        self.preview_label.setFont(pg.QtGui.QFont(font_family, label_size))
+        layout.addWidget(self.preview_label)
+
+        btn_box = QHBoxLayout()
+        
+        clear_btn = QPushButton("Revert to Default")
+        clear_btn.setStyleSheet("color: #d90000;")
+        clear_btn.clicked.connect(self._clear_and_accept)
+        
+        ok_btn = QPushButton("Apply")
+        ok_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        ok_btn.clicked.connect(self.accept)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_box.addWidget(clear_btn)
+        btn_box.addStretch()
+        btn_box.addWidget(cancel_btn)
+        btn_box.addWidget(ok_btn)
+        layout.addLayout(btn_box)
+
+        self.update_preview(current_raw_text)
+
+    def _clear_and_accept(self):
+        self.input_edit.setText("")
+        self.accept()
+
+    def open_constants(self):
+        from ui.dialogs.data_mgmt import ConstantsDialog
+        dlg = ConstantsDialog(self)
+        if dlg.exec() == QDialog.Accepted and dlg.selected_key:
+            self.input_edit.insert(f"{{\\{dlg.selected_key}}}")
+
+    def update_preview(self, text):
+        html_text = text
+        import re
+        
+        # 1. Physics Constants
+        def const_repl(m):
+            c_key = m.group(1)
+            return PHYSICS_CONSTANTS[c_key]["html"] if c_key in PHYSICS_CONSTANTS else f"\\{{{c_key}}}"
+        html_text = re.sub(r'\{\\(.*?)\}', const_repl, html_text)
+
+        # 2. Greek Letters
+        def param_repl(m):
+            p_key = m.group(1)
+            return GREEK_MAP.get(p_key, p_key)
+        html_text = re.sub(r'\{(.*?)\}', param_repl, html_text)
+
+        # 3. Superscripts (e.g., ^2, ^-1)
+        html_text = re.sub(r'\^([\w\.\-]+)', r'<sup>\1</sup>', html_text)
+        
+        # 4. Subscripts (e.g., _0, _max)
+        html_text = re.sub(r'_([\w\.\-]+)', r'<sub>\1</sub>', html_text)
+
+        self.preview_label.setText(html_text)
+        self.parsed_html = html_text
+
+    def get_result(self):
+        return self.input_edit.text().strip(), self.parsed_html
 
 class BadgerLoopQtGraph(QMainWindow):
     def __init__(self):
@@ -1792,9 +1896,18 @@ class BadgerLoopQtGraph(QMainWindow):
             py_equation = re.sub(r'\blog_?2\s*\(', 'np.log2(', py_equation, flags=re.IGNORECASE)
             py_equation = re.sub(r'\blog\s*\(', 'np.log10(', py_equation, flags=re.IGNORECASE)
             py_equation = re.sub(r'\bln\s*\(', 'np.log(', py_equation, flags=re.IGNORECASE)
+            # --- NEW: ABSOLUTE VALUE ---
+            py_equation = re.sub(r'\babs\s*\(', 'np.abs(', py_equation, flags=re.IGNORECASE)
     
             is_csv = (self.file_type == "CSV")
             calculated_data_blocks = []
+            
+            # --- NEW: NORMALIZATION ENGINE ---
+            def norm_func(v):
+                arr = np.asarray(v, dtype=np.float64)
+                m = np.max(arr)
+                return arr / m if m != 0 else arr
+            # ---------------------------------
             
             with np.errstate(divide='ignore', invalid='ignore'):
                 for sw in range(self.dataset.num_sweeps):
@@ -1803,7 +1916,10 @@ class BadgerLoopQtGraph(QMainWindow):
                         
                     data_dict = {idx: arr[:, idx] for idx in set(used_indices)}
                     index_arr = np.arange(arr.shape[0])
-                    result = eval(py_equation, {"np": np, "data_dict": data_dict, "e": np.e, "pi": np.pi, "index": index_arr})
+                    
+                    # Inject norm_func into the math environment!
+                    env = {"np": np, "data_dict": data_dict, "e": np.e, "pi": np.pi, "index": index_arr, "norm": norm_func}
+                    result = eval(py_equation, {"__builtins__": {}}, env)
                     
                     if not isinstance(result, np.ndarray):
                         result = np.full(arr.shape[0], result)
@@ -2983,128 +3099,178 @@ class BadgerLoopQtGraph(QMainWindow):
         is_surface = (self.plot_mode == "3D" and self.graphtype.currentText() == "Surface")
         self.heatmap_cmap.setVisible(is_heatmap or is_surface)
         self.heatmap_cmap_label.setVisible(is_heatmap or is_surface)
+        
+    def _build_settings_dialog(self):
+        self.layout_dialog = QDialog(self)
+        self.layout_dialog.setWindowTitle("Plot Settings & Formatting")
+        self.layout_dialog.setMinimumWidth(450)
+        ld_layout = QVBoxLayout(self.layout_dialog)
+
+        tabs = QTabWidget()
+        ld_layout.addWidget(tabs)
+
+        # -- TAB 1: Canvas --
+        tab1 = QWidget()
+        l1 = QFormLayout(tab1)
+        
+        self.axis_thick_slider = QSlider(Qt.Horizontal)
+        self.axis_thick_slider.setRange(1, 10)
+        self.axis_thick_slider.setValue(1)
+        self.axis_thick_slider.setTickPosition(QSlider.TicksBelow)
+        self.axis_thick_slider.setTickInterval(1)
+        
+        self.axis_thick_label = QLabel("1 px")
+        
+        thick_lay = QHBoxLayout()
+        thick_lay.addWidget(self.axis_thick_slider)
+        thick_lay.addWidget(self.axis_thick_label)
+        
+        self.axis_thick_slider.valueChanged.connect(self._on_axis_thick_changed)
+        l1.addRow("Axis Line Thickness:", thick_lay)
+
+        # --- RESTORED GRID LINES ---
+        grid_lay = QHBoxLayout()
+        self.grid_x_cb = QCheckBox("X Grid"); self.grid_x_cb.setChecked(True)
+        self.grid_y_cb = QCheckBox("Y Grid"); self.grid_y_cb.setChecked(True)
+        self.grid_alpha_edit = QLineEdit("0.35")
+        self.grid_alpha_edit.setFixedWidth(50)
+        grid_lay.addWidget(self.grid_x_cb); grid_lay.addWidget(self.grid_y_cb)
+        grid_lay.addWidget(QLabel("Opacity:")); grid_lay.addWidget(self.grid_alpha_edit)
+        l1.addRow("Grid Lines:", grid_lay)
+        # ---------------------------
+
+        self.bg_color_combo = QComboBox()
+        self.bg_color_combo.addItems(["White", "Black", "Transparent"])
+        l1.addRow("Background Color:", self.bg_color_combo)
+
+        self.aspect_combo = QComboBox(); self.aspect_combo.addItems(["Free", "1:1", "4:3", "16:9", "Custom"])
+        self.aspect_w_edit = QLineEdit("16"); self.aspect_h_edit = QLineEdit("9")
+        self.aspect_colon = QLabel(":")
+        cust_asp = QHBoxLayout()
+        cust_asp.addWidget(self.aspect_combo); cust_asp.addWidget(self.aspect_w_edit)
+        cust_asp.addWidget(self.aspect_colon); cust_asp.addWidget(self.aspect_h_edit)
+        self.aspect_w_edit.setVisible(False); self.aspect_h_edit.setVisible(False); self.aspect_colon.setVisible(False)
+        self.aspect_combo.currentTextChanged.connect(self._update_aspect_ui)
+        self.aspect_w_edit.textChanged.connect(self._resize_plot_widget)
+        self.aspect_h_edit.textChanged.connect(self._resize_plot_widget)
+        l1.addRow("Aspect Ratio:", cust_asp)
+        tabs.addTab(tab1, "Canvas")
+
+        # -- TAB 2: Fonts --
+        tab2 = QWidget()
+        l2 = QFormLayout(tab2)
+        self.font_family_combo = QFontComboBox()
+        l2.addRow("Font Family:", self.font_family_combo)
+        self.label_fontsize_edit = QLineEdit("14")
+        l2.addRow("Axis Label Size:", self.label_fontsize_edit)
+        self.tick_fontsize_edit = QLineEdit("11")
+        l2.addRow("Tick Number Size:", self.tick_fontsize_edit)
+        self.legend_fontsize_edit = QLineEdit("11")
+        l2.addRow("Legend Text Size:", self.legend_fontsize_edit)
+        tabs.addTab(tab2, "Typography")
+
+        # -- TAB 3: Traces --
+        tab3 = QWidget()
+        l3 = QFormLayout(tab3)
+        self.graphtype = QComboBox()
+        self.graphtype.addItems(["Line", "Scatter", "FFT (Spectrum)", "Surface"]) 
+        self.graphtype.currentTextChanged.connect(self._update_graphtype_ui)
+        l3.addRow("Graph Type:", self.graphtype)
+
+        self.line_thickness_edit = QLineEdit("2")
+        l3.addRow("Line Thickness:", self.line_thickness_edit)
+
+        self.point_size_edit = QLineEdit("5")
+        l3.addRow("Scatter Point Size:", self.point_size_edit)
+
+        self.symbol_combo = QComboBox()
+        self.symbol_combo.addItems(["Circle (o)", "Square (s)", "Triangle (t)", "Star (star)", "Cross (+)", "X (x)"])
+        l3.addRow("Scatter Symbol:", self.symbol_combo)
+
+        self.heatmap_cmap = QComboBox()
+        self.heatmap_cmap.addItems(["viridis", "plasma", "inferno", "magma", "cividis", "jet", "gray"])
+        self.heatmap_cmap.currentTextChanged.connect(self.plot)
+        self.heatmap_cmap_label = QLabel("Heatmap Colormap:")
+        l3.addRow(self.heatmap_cmap_label, self.heatmap_cmap)
+        tabs.addTab(tab3, "Traces")
+
+        # -- TAB 4: Slicing & Scales --
+        tab4 = QWidget()
+        l4 = QFormLayout(tab4)
+        
+        self.xscale = QComboBox(); self.xscale.addItems(["Linear", "Log"]); self.xscale.currentTextChanged.connect(self._update_xscale_ui)
+        self.xbase = QLineEdit("10")
+        x_lay = QHBoxLayout(); x_lay.addWidget(self.xscale); x_lay.addWidget(self.xbase)
+        l4.addRow("X Axis Scale:", x_lay)
+
+        self.yscale = QComboBox(); self.yscale.addItems(["Linear", "Log"]); self.yscale.currentTextChanged.connect(self._update_yscale_ui)
+        self.ybase = QLineEdit("10")
+        y_lay = QHBoxLayout(); y_lay.addWidget(self.yscale); y_lay.addWidget(self.ybase)
+        l4.addRow("Y Axis Scale:", y_lay)
+
+        self.zscale = QComboBox(); self.zscale.addItems(["Linear", "Log"]); self.zscale.currentTextChanged.connect(self._update_zscale_ui)
+        self.zbase = QLineEdit("10")
+        self.zscale_label = QLabel("Z Axis Scale:")
+        z_lay = QHBoxLayout(); z_lay.addWidget(self.zscale); z_lay.addWidget(self.zbase)
+        l4.addRow(self.zscale_label, z_lay)
+
+        self.sweeps_edit = QLineEdit("-1")
+        self.sweeps_label = QLabel("Sweeps (e.g. 0,2,4 or 0:5):")
+        l4.addRow(self.sweeps_label, self.sweeps_edit)
+        self.points_edit = QLineEdit("-1")
+        l4.addRow("Points (e.g. 100:500):", self.points_edit)
+        self.bins_edit = QLineEdit("auto")
+        self.bins_label = QLabel("Histogram Bins:")
+        l4.addRow(self.bins_label, self.bins_edit)
+        tabs.addTab(tab4, "Data & Scales")
+
+        # -- Action Buttons --
+        btn_lay = QHBoxLayout()
+        save_def_btn = QPushButton("Save Defaults")
+        save_def_btn.clicked.connect(self._save_formatting_defaults)
+        apply_btn = QPushButton("Apply Settings")
+        apply_btn.setStyleSheet("font-weight: bold; background-color: #0055ff; color: white; padding: 6px;")
+        apply_btn.clicked.connect(self.plot)
+        
+        btn_lay.addWidget(save_def_btn)
+        btn_lay.addStretch()
+        btn_lay.addWidget(apply_btn)
+        ld_layout.addLayout(btn_lay)
+        
+    def _on_axis_thick_changed(self, val):
+        self.axis_thick_label.setText(f"{val} px")
+        self._apply_axis_fonts() # Instantly applies it without a full replot!
+
+    def _save_formatting_defaults(self):
+        self.settings.setValue("axis_thickness", self.axis_thick_slider.value())
+        self.settings.setValue("grid_x", self.grid_x_cb.isChecked())
+        self.settings.setValue("grid_y", self.grid_y_cb.isChecked())
+        self.settings.setValue("grid_alpha", self.grid_alpha_edit.text())
+        self.settings.setValue("bg_color", self.bg_color_combo.currentText())
+        self.settings.setValue("font_family", self.font_family_combo.currentFont().family())
+        self.settings.setValue("legend_fontsize", self.legend_fontsize_edit.text())
+        self.settings.setValue("line_thickness", self.line_thickness_edit.text())
+        self.settings.setValue("symbol", self.symbol_combo.currentText())
+        QMessageBox.information(self, "Saved", "Plot formatting defaults saved successfully.\nThey will automatically load next time you launch EggPlot.")
+
+    def _apply_canvas_settings(self):
+        # 1. Background
+        bg = self.bg_color_combo.currentText()
+        if bg == "White": self.plot_widget.setBackground("w")
+        elif bg == "Black": self.plot_widget.setBackground("k")
+        else: self.plot_widget.setBackground(None) 
+        
+        # 2. Grid
+        try: alpha = float(self.grid_alpha_edit.text())
+        except: alpha = 0.35
+        self.plot_widget.showGrid(x=self.grid_x_cb.isChecked(), y=self.grid_y_cb.isChecked(), alpha=alpha)
 
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         main = QHBoxLayout(central)
         
-        self.layout_dialog = QDialog(self)
-        self.layout_dialog.setWindowTitle("Plot Settings & Slicing")
-        self.layout_dialog.setMinimumWidth(350)
-        ld_layout = QVBoxLayout(self.layout_dialog)
-        
-        ld_layout.addWidget(QLabel("<b>Graph Type:</b>"))
-        self.graphtype = QComboBox()
-        self.graphtype.addItems(["Line", "Scatter", "FFT (Spectrum)", "Surface"]) 
-        self.graphtype.currentTextChanged.connect(self._update_graphtype_ui)
-        ld_layout.addWidget(self.graphtype)
-
-        ld_layout.addSpacing(10)
-        ld_layout.addWidget(QLabel("<b>Plot Aspect Ratio:</b>"))
-        aspect_grid = QGridLayout()
-        
-        self.aspect_combo = QComboBox()
-        self.aspect_combo.addItems(["Free", "1:1", "4:3", "16:9", "Custom"])
-        aspect_grid.addWidget(self.aspect_combo, 0, 0, 1, 2)
-        
-        self.aspect_w_edit = QLineEdit("16")
-        self.aspect_h_edit = QLineEdit("9")
-        self.aspect_colon = QLabel(":")
-        self.aspect_colon.setAlignment(Qt.AlignCenter)
-        
-        self.aspect_w_edit.setVisible(False)
-        self.aspect_h_edit.setVisible(False)
-        self.aspect_colon.setVisible(False)
-        
-        custom_aspect_layout = QHBoxLayout()
-        custom_aspect_layout.addWidget(self.aspect_w_edit)
-        custom_aspect_layout.addWidget(self.aspect_colon)
-        custom_aspect_layout.addWidget(self.aspect_h_edit)
-        
-        aspect_grid.addLayout(custom_aspect_layout, 1, 0, 1, 2)
-        ld_layout.addLayout(aspect_grid)
-        
-        self.aspect_combo.currentTextChanged.connect(self._update_aspect_ui)
-        self.aspect_w_edit.textChanged.connect(self._resize_plot_widget)
-        self.aspect_h_edit.textChanged.connect(self._resize_plot_widget)
-
-        ld_layout.addSpacing(10)
-        ld_layout.addWidget(QLabel("<b>Data Slicing & Bins:</b>"))
-        slice_grid = QGridLayout()
-        self.sweeps_label = QLabel("Sweeps (e.g. 0,2,4 or 0:5):")
-        slice_grid.addWidget(self.sweeps_label, 0, 0)
-        self.sweeps_edit = QLineEdit("-1")
-        slice_grid.addWidget(self.sweeps_edit, 0, 1)
-        slice_grid.addWidget(QLabel("Points (e.g. 100:500):"), 1, 0)
-        self.points_edit = QLineEdit("-1")
-        slice_grid.addWidget(self.points_edit, 1, 1)
-        
-        # --- NEW: HISTOGRAM BINS ---
-        self.bins_label = QLabel("Histogram Bins:")
-        self.bins_edit = QLineEdit("auto")
-        self.bins_edit.setToolTip("Type 'auto' for smart binning, or a number like '50'")
-        slice_grid.addWidget(self.bins_label, 2, 0)
-        slice_grid.addWidget(self.bins_edit, 2, 1)
-        # ---------------------------
-        
-        ld_layout.addLayout(slice_grid)
-
-        ld_layout.addSpacing(10)
-        ld_layout.addWidget(QLabel("<b>Axis Scales & Bases:</b>"))
-        scale_grid = QGridLayout()
-        scale_grid.addWidget(QLabel("X Axis:"), 0, 0)
-        self.xscale = QComboBox()
-        self.xscale.addItems(["Linear", "Log"])
-        self.xscale.currentTextChanged.connect(self._update_xscale_ui)
-        scale_grid.addWidget(self.xscale, 0, 1)
-        self.xbase = QLineEdit("10")
-        self.xbase.setPlaceholderText("Base (e.g. 10 or e)")
-        scale_grid.addWidget(self.xbase, 0, 2)
-
-        scale_grid.addWidget(QLabel("Y Axis:"), 1, 0)
-        self.yscale = QComboBox()
-        self.yscale.addItems(["Linear", "Log"])
-        self.yscale.currentTextChanged.connect(self._update_yscale_ui)
-        scale_grid.addWidget(self.yscale, 1, 1)
-        self.ybase = QLineEdit("10")
-        self.ybase.setPlaceholderText("Base")
-        scale_grid.addWidget(self.ybase, 1, 2)
-
-        self.zscale_label = QLabel("Z Axis:")
-        scale_grid.addWidget(self.zscale_label, 2, 0)
-        self.zscale = QComboBox()
-        self.zscale.addItems(["Linear", "Log"])
-        self.zscale.currentTextChanged.connect(self._update_zscale_ui)
-        scale_grid.addWidget(self.zscale, 2, 1)
-        self.zbase = QLineEdit("10")
-        self.zbase.setPlaceholderText("Base")
-        scale_grid.addWidget(self.zbase, 2, 2)
-        ld_layout.addLayout(scale_grid)
-
-        self.zscale_label.setVisible(False)
-        self.zscale.setVisible(False)
-        self.zbase.setVisible(False)
-
-        ld_layout.addSpacing(10)
-        ld_layout.addWidget(QLabel("<b>Sizes & Fonts:</b>"))
-        font_grid = QGridLayout()
-        font_grid.addWidget(QLabel("Label Size:"), 0, 0)
-        self.label_fontsize_edit = QLineEdit("14")
-        font_grid.addWidget(self.label_fontsize_edit, 0, 1)
-        font_grid.addWidget(QLabel("Tick Size:"), 1, 0)
-        self.tick_fontsize_edit = QLineEdit("11")
-        font_grid.addWidget(self.tick_fontsize_edit, 1, 1)
-        font_grid.addWidget(QLabel("Point Size (2D):"), 2, 0)
-        self.point_size_edit = QLineEdit("5")
-        font_grid.addWidget(self.point_size_edit, 2, 1)
-        ld_layout.addLayout(font_grid)
-
-        ld_layout.addStretch()
-        apply_btn = QPushButton("Apply to Plot")
-        apply_btn.setStyleSheet("font-weight: bold; background-color: #e0e0e0; padding: 6px;")
-        apply_btn.clicked.connect(self.plot)
-        ld_layout.addWidget(apply_btn)
+        self._build_settings_dialog()
 
         controls = QVBoxLayout()
         main.addLayout(controls, 0)
@@ -3884,6 +4050,19 @@ class BadgerLoopQtGraph(QMainWindow):
         self.points_edit.setText(self.settings.value("points", "-1"))
         self.label_fontsize_edit.setText(self.settings.value("label_fontsize", "12"))
         self.tick_fontsize_edit.setText(self.settings.value("tick_fontsize", "10"))
+        try: saved_thick = int(self.settings.value("axis_thickness", 1))
+        except: saved_thick = 1
+        self.axis_thick_slider.setValue(saved_thick)
+        self.axis_thick_label.setText(f"{saved_thick} px")
+        self.grid_x_cb.setChecked(self.settings.value("grid_x", True, bool))
+        self.grid_y_cb.setChecked(self.settings.value("grid_y", True, bool))
+        self.grid_alpha_edit.setText(self.settings.value("grid_alpha", "0.35"))
+        self.bg_color_combo.setCurrentText(self.settings.value("bg_color", "White"))
+        if font_str := self.settings.value("font_family", ""):
+            self.font_family_combo.setCurrentFont(pg.QtGui.QFont(font_str))
+        self.legend_fontsize_edit.setText(self.settings.value("legend_fontsize", "11"))
+        self.line_thickness_edit.setText(self.settings.value("line_thickness", "2"))
+        self.symbol_combo.setCurrentText(self.settings.value("symbol", "Circle (o)"))
         self.errorbar_sigma_edit.setText(self.settings.value("errorbar_sigma", "1.0"))
         
         self.errorbars_enabled = self.settings.value("errorbars", False, bool)
@@ -4429,11 +4608,19 @@ class BadgerLoopQtGraph(QMainWindow):
         self.zcol.blockSignals(False)
 
     def _prompt_custom_axis_label(self, orientation):
-        from PyQt5.QtWidgets import QInputDialog
-        current_label = self.custom_axis_labels.get(orientation) or ""
-        new_label, ok = QInputDialog.getText(self, "Custom Axis Label", f"Enter custom text for the '{orientation.capitalize()}' axis label:\n(Leave blank to revert to default column name)", QLineEdit.Normal, current_label)
-        if ok:
-            self.custom_axis_labels[orientation] = new_label.strip() if new_label.strip() else None
+        current_data = self.custom_axis_labels.get(orientation)
+        if isinstance(current_data, dict):
+            current_raw = current_data.get("raw", "")
+        else:
+            current_raw = current_data or "" # Backwards compatibility for old saved strings
+            
+        dlg = RichTextAxisLabelDialog(orientation, current_raw, self)
+        if dlg.exec() == QDialog.Accepted:
+            raw_text, html_text = dlg.get_result()
+            if raw_text:
+                self.custom_axis_labels[orientation] = {"raw": raw_text, "html": html_text}
+            else:
+                self.custom_axis_labels[orientation] = None
             self.plot()
             
     def _prompt_legend_rename(self, sig_key, current_name):
@@ -4453,21 +4640,48 @@ class BadgerLoopQtGraph(QMainWindow):
             self.plot() # Instantly redraw to apply the new name
 
     def _apply_axis_fonts(self):
-        try:
-            label_size = int(self.label_fontsize_edit.text())
-            if label_size <= 0: raise ValueError
-        except ValueError: label_size = 12
-        try:
-            tick_size = int(self.tick_fontsize_edit.text())
-            if tick_size <= 0: raise ValueError
-        except ValueError: tick_size = 10
-            
+        try: label_size = int(self.label_fontsize_edit.text())
+        except ValueError: label_size = 14
+        try: tick_size = int(self.tick_fontsize_edit.text())
+        except ValueError: tick_size = 11
+
+        # Pull thickness directly from the new slider
+        axis_thick = self.axis_thick_slider.value()
+
+        font_family = self.font_family_combo.currentFont().family()
+        label_font = pg.QtGui.QFont(font_family, label_size)
+        tick_font = pg.QtGui.QFont(font_family, tick_size)
+        
+        try: leg_size = int(self.legend_fontsize_edit.text())
+        except: leg_size = 11
+        leg_font = pg.QtGui.QFont(font_family, leg_size)
+
         axes_to_update = [self.plot_widget.getAxis(ax) for ax in ("bottom", "left", "top", "right")]
-        if hasattr(self, 'heatmap_item'): axes_to_update.append(self.heatmap_item.axis)
+        if hasattr(self, 'heatmap_item') and self.heatmap_item.isVisible():
+            axes_to_update.append(self.heatmap_item.axis)
+
+        # Dynamic color inversion for dark mode
+        axis_color = 'w' if self.bg_color_combo.currentText() == "Black" else 'k'
 
         for axis in axes_to_update:
-            axis.label.setFont(pg.QtGui.QFont(axis.label.font().family(), label_size))
-            axis.setStyle(tickFont=pg.QtGui.QFont(axis.label.font().family(), tick_size))
+            axis.label.setFont(label_font)
+            axis.setStyle(tickFont=tick_font)
+            axis.setPen(pg.mkPen(axis_color, width=axis_thick))
+            
+            # CRITICAL FIX: Force PyQtGraph to delete its old pixel cache so the line can shrink!
+            axis.picture = None 
+            axis.update()
+
+        # Apply Legend Typography
+        if hasattr(self, 'legend') and self.legend is not None:
+            for sample, label in self.legend.items:
+                label.setFont(leg_font)
+                label.setText(label.text, color=axis_color) 
+                
+        if hasattr(self, 'fit_legend') and self.fit_legend is not None:
+            for sample, label in self.fit_legend.items:
+                label.setFont(leg_font)
+                label.setText(label.text, color=axis_color)
 
     def parse_list(self, text):
         if text.strip() == "-1": return -1
@@ -4750,37 +4964,52 @@ class BadgerLoopQtGraph(QMainWindow):
                 if left_pkgs[0].get("x_name", "X") == right_pkgs[0].get("x_name", "X"): x_shared = True
                 if left_pkgs[0].get("y_name", "Y") == right_pkgs[0].get("y_name", "Y"): y_shared = True
                     
+            # --- NEW: Smart Axis & Text Coloring ---
+            bg_val = self.bg_color_combo.currentText()
+            if bg_val == "Black":
+                vis_color = 'w'
+                hid_color = 'k'
+            elif bg_val == "Transparent":
+                vis_color = 'k'
+                hid_color = (0, 0, 0, 0)
+            else: # White
+                vis_color = 'k'
+                hid_color = 'w'
+            # ---------------------------------------
+
             main_vb = self.plot_widget.getViewBox()
             self.vb_right.setXLink(main_vb if x_shared else None)
             self.vb_right.setYLink(main_vb if y_shared else None)
             
+            bottom_axis = self.plot_widget.getAxis('bottom')
+            left_axis = self.plot_widget.getAxis('left')
             right_axis = self.plot_widget.getAxis('right')
             top_axis = self.plot_widget.getAxis('top')
             
             self.plot_widget.showAxis('right', show=True)
             self.plot_widget.showAxis('top', show=True)
             
+            # Lock the visible text colors for the primary axes
+            bottom_axis.setTextPen(pg.mkPen(vis_color))
+            left_axis.setTextPen(pg.mkPen(vis_color))
+            
             if has_right_axis:
                 if x_shared:
                     top_axis.linkToView(main_vb)
                     top_axis.setStyle(showValues=True)
-                    top_axis.setPen(pg.mkPen('k'))
-                    top_axis.setTextPen(pg.mkPen('w')) 
+                    top_axis.setTextPen(pg.mkPen(hid_color)) 
                 else:
                     top_axis.linkToView(self.vb_right)
                     top_axis.setStyle(showValues=True)
-                    top_axis.setPen(pg.mkPen('k'))
                     top_axis.setTextPen(pg.mkPen('#d90000')) 
                 
                 if y_shared:
                     right_axis.linkToView(main_vb)
                     right_axis.setStyle(showValues=True)
-                    right_axis.setPen(pg.mkPen('k'))
-                    right_axis.setTextPen(pg.mkPen('w')) 
+                    right_axis.setTextPen(pg.mkPen(hid_color)) 
                 else:
                     right_axis.linkToView(self.vb_right)
                     right_axis.setStyle(showValues=True)
-                    right_axis.setPen(pg.mkPen('k'))
                     right_axis.setTextPen(pg.mkPen('#d90000')) 
                     
                 right_axis.setGrid(0)
@@ -4790,25 +5019,29 @@ class BadgerLoopQtGraph(QMainWindow):
                 top_axis.linkToView(main_vb)
                 right_axis.setStyle(showValues=True) 
                 top_axis.setStyle(showValues=True)
-                right_axis.setPen(pg.mkPen('k'))
-                top_axis.setPen(pg.mkPen('k'))
-                right_axis.setTextPen(pg.mkPen('w')) 
-                top_axis.setTextPen(pg.mkPen('w'))
+                # Blend the text into the background for a clean bounding box
+                right_axis.setTextPen(pg.mkPen(hid_color)) 
+                top_axis.setTextPen(pg.mkPen(hid_color))
                 right_axis.setGrid(0)
                 top_axis.setGrid(0)
 
             if packages:
                 is_fft = getattr(self, 'fft_mode_active', False)
                 
-                # Setup Bottom/Left Labels
+                # Helper to safely extract HTML or fallback text
+                def get_lbl(orient, default):
+                    if is_fft: return default
+                    saved = self.custom_axis_labels.get(orient)
+                    if isinstance(saved, dict): return saved.get("html", default)
+                    return saved or default
+                
+                # Setup Bottom/Left Labels with correct main text color
                 if left_pkgs:
                     default_x_l = left_pkgs[0].get("x_name", "X Axis") if len(set([p.get("x_name") for p in left_pkgs])) == 1 else "Bottom X"
-                    final_x_l = default_x_l if is_fft else (self.custom_axis_labels.get("bottom") or default_x_l)
-                    self.plot_widget.setLabel("bottom", final_x_l)
+                    self.plot_widget.setLabel("bottom", get_lbl("bottom", default_x_l), color=vis_color)
                     
                     default_y_l = left_pkgs[0].get("y_name", "Y Axis") if len(set([p.get("y_name") for p in left_pkgs])) == 1 else "Left Values"
-                    final_y_l = default_y_l if is_fft else (self.custom_axis_labels.get("left") or default_y_l)
-                    self.plot_widget.setLabel("left", final_y_l)
+                    self.plot_widget.setLabel("left", get_lbl("left", default_y_l), color=vis_color)
                 else:
                     self.plot_widget.setLabel("bottom", "")
                     self.plot_widget.setLabel("left", "")
@@ -4817,15 +5050,13 @@ class BadgerLoopQtGraph(QMainWindow):
                 if right_pkgs:
                     if not x_shared:
                         default_x_r = right_pkgs[0].get("x_name", "X Axis") if len(set([p.get("x_name") for p in right_pkgs])) == 1 else "Top X"
-                        final_x_r = default_x_r if is_fft else (self.custom_axis_labels.get("top") or default_x_r)
-                        self.plot_widget.setLabel("top", final_x_r, color='#d90000')
+                        self.plot_widget.setLabel("top", get_lbl("top", default_x_r), color='#d90000')
                     else:
                         self.plot_widget.setLabel("top", "") 
                         
                     if not y_shared:
                         default_y_r = right_pkgs[0].get("y_name", "Y Axis") if len(set([p.get("y_name") for p in right_pkgs])) == 1 else "Right Values"
-                        final_y_r = default_y_r if is_fft else (self.custom_axis_labels.get("right") or default_y_r)
-                        self.plot_widget.setLabel("right", final_y_r, color='#d90000')
+                        self.plot_widget.setLabel("right", get_lbl("right", default_y_r), color='#d90000')
                     else:
                         self.plot_widget.setLabel("right", "") 
                 else:
@@ -4836,6 +5067,13 @@ class BadgerLoopQtGraph(QMainWindow):
             total_plotted_sw = len(set(p.get("sw", 0) for p in packages))
             
             graphtype = self.graphtype.currentText()
+            # --- NEW: EXTRACT TRACE SETTINGS ---
+            try: line_thick = float(self.line_thickness_edit.text())
+            except: line_thick = 2.0
+            
+            sym_map = {"Circle (o)": "o", "Square (s)": "s", "Triangle (t)": "t", "Star (star)": "star", "Cross (+)": "+", "X (x)": "x"}
+            sym = sym_map.get(self.symbol_combo.currentText(), "o")
+            # -----------------------------------
             curve_idx, scatter_idx, err_idx = 0, 0, 0
             
             # Context checks for smart naming
@@ -4899,7 +5137,7 @@ class BadgerLoopQtGraph(QMainWindow):
                     
                     scatter.setData(x=np.array([pkg["x_mean"]], dtype=np.float64), 
                                     y=np.array([pkg["y_mean"]], dtype=np.float64), 
-                                    size=pt_size + 3, pen=pg.mkPen(None), brush=pg.mkBrush(line_color))
+                                    size=pt_size + 3, pen=pg.mkPen(None), brush=pg.mkBrush(line_color), symbol=sym) # <--- Changed
                     scatter.setVisible(True)
                     
                     if show_legend and legend_name not in added_to_legend:
@@ -4932,7 +5170,7 @@ class BadgerLoopQtGraph(QMainWindow):
                             
                         curve = self.curve_pool[curve_idx]
                         target_vb.addItem(curve)
-                        curve.setData(pkg["x"], pkg["y"], pen=pg.mkPen(line_color, width=2))
+                        curve.setData(pkg["x"], pkg["y"], pen=pg.mkPen(line_color, width=line_thick)) # <--- Changed
                         curve.setVisible(True)
                         
                         if show_legend:
@@ -4950,7 +5188,7 @@ class BadgerLoopQtGraph(QMainWindow):
                             
                         scatter = self.scatter_pool[scatter_idx]
                         target_vb.addItem(scatter)
-                        scatter.setData(x=pkg["x"], y=pkg["y"], size=pt_size, pen=pg.mkPen(None), brush=pg.mkBrush(line_color))
+                        scatter.setData(x=pkg["x"], y=pkg["y"], size=pt_size, pen=pg.mkPen(None), brush=pg.mkBrush(line_color), symbol=sym) # <--- Changed
                         scatter.setVisible(True) 
                         
                         if show_legend:
@@ -4983,7 +5221,8 @@ class BadgerLoopQtGraph(QMainWindow):
                 if hasattr(self, 'save_function_btn'): self.save_function_btn.setVisible(True)
                 if hasattr(self, 'clear_fit_btn'): self.clear_fit_btn.setVisible(True)
                 if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
-                
+             
+            self._apply_canvas_settings()
             self._apply_axis_fonts()
             self.plot_widget.getViewBox().autoRange()
             self.vb_right.autoRange()
