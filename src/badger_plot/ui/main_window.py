@@ -25,7 +25,7 @@ from ui.dialogs.data_mgmt import (
     FileImportDialog, SweepTableDialog, ManageColumnsDialog, 
     MetadataDialog, CreateColumnDialog, CopyableErrorDialog
 )
-from ui.dialogs.analysis import SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool, LoopAreaDialog
+from ui.dialogs.analysis import SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool, LoopAreaDialog, BaselineSubtractionDialog, AreaUnderCurveDialog
 from ui.dialogs.fitting import (
     FitFunctionDialog, CustomFitDialog, MultiFitManagerDialog, FitDataToFunctionWindow
 )
@@ -499,6 +499,13 @@ class BadgerLoopQtGraph(QMainWindow):
         else:
             self.highlight_scatter.hide()
             self.stats_label.hide()
+            
+        # --- ADD THIS TO THE VERY END OF THE FUNCTION ---
+        if hasattr(self, '_on_selection_finished_cb') and self._on_selection_finished_cb:
+            cb = self._on_selection_finished_cb
+            self._on_selection_finished_cb = None
+            cb()
+        # ------------------------------------------------
         
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -751,6 +758,185 @@ class BadgerLoopQtGraph(QMainWindow):
             self._create_processed_column(config, pair)
         else:
             self.phantom_curve.setVisible(False)
+            
+    def open_baseline_subtraction(self):
+        if not self.dataset: return
+        
+        # --- NEW FOLDER INTERCEPT ---
+        if self.file_type == "MultiCSV":
+            self._intercept_folder_edit(self._show_actual_baseline_dialog)
+            return
+        # ----------------------------
+        
+        fname = self.dataset.filename
+        orig_name = os.path.basename(fname)
+        directory = os.path.dirname(fname)
+
+        if not orig_name.startswith("MIRROR_") and self.file_type != "ConcatenatedCSV":
+            name_only, ext = os.path.splitext(orig_name)
+            import glob
+            search_pattern = os.path.join(directory, f"MIRROR_{name_only}*{ext}")
+            existing_mirrors = [os.path.basename(p) for p in glob.glob(search_pattern)]
+
+            if not existing_mirrors:
+                target_file = os.path.join(directory, f"MIRROR_{orig_name}")
+                try: 
+                    if self.file_type in ["CSV", "ConcatenatedCSV"]: self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                except Exception as e:
+                    from PyQt5.QtWidgets import QMessageBox
+                    QMessageBox.critical(self, "Error", f"Failed to create mirror:\n{e}")
+                    return
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.information(self, "Mirror Created", "To protect original data, a Mirror file has been created and loaded.")
+            else:
+                from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton
+                dlg_mirror = QDialog(self)
+                dlg_mirror.setWindowTitle("Mirror File Exists")
+                dlg_mirror.setFixedSize(450, 150)
+                l = QVBoxLayout(dlg_mirror)
+                l.addWidget(QLabel("Select an existing mirror to load, or create a new one:"))
+                combo = QComboBox()
+                combo.addItem("--- Create New Mirror ---")
+                combo.addItems(existing_mirrors)
+                l.addWidget(combo)
+                
+                btn_box = QHBoxLayout()
+                ok, cancel = QPushButton("OK"), QPushButton("Cancel")
+                btn_box.addWidget(ok); btn_box.addWidget(cancel)
+                l.addLayout(btn_box)
+                
+                ok.clicked.connect(dlg_mirror.accept); cancel.clicked.connect(dlg_mirror.reject)
+                if dlg_mirror.exec() != QDialog.Accepted: return
+                
+                choice = combo.currentText()
+                if choice == "--- Create New Mirror ---":
+                    import re
+                    max_num = max([int(m.group(1)) for m in [re.search(r'\((\d+)\)', x) for x in existing_mirrors] if m] + [1 if f"MIRROR_{orig_name}" in existing_mirrors else 0])
+                    new_mirror_name = f"MIRROR_{name_only} ({max_num + 1}){ext}"
+                    target_file = os.path.join(directory, new_mirror_name)
+                    
+                    if self.file_type in ["CSV", "ConcatenatedCSV"]: self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                else:
+                    target_file = os.path.join(directory, choice)
+
+            opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+            if self.file_type == "CSV": opts["delimiter"] = ","
+                
+            from PyQt5.QtWidgets import QProgressDialog
+            self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setCancelButton(None)
+            self.progress_dialog.setMinimumDuration(0)
+            self.progress_dialog.show()
+
+            def on_mirror_loaded(dataset):
+                self._on_load_finished(dataset, target_file, opts)
+                self._show_actual_baseline_dialog() 
+
+            self.loader_thread = DataLoaderThread(target_file, opts)
+            self.loader_thread.progress.connect(self._update_progress_ui)
+            self.loader_thread.finished.connect(on_mirror_loaded)
+            self.loader_thread.error.connect(self._on_load_error)
+            self.loader_thread.start()
+            return
+
+        self._show_actual_baseline_dialog()
+
+    def _show_actual_baseline_dialog(self):
+        from PyQt5.QtWidgets import QMessageBox, QDialog, QApplication, QProgressDialog
+        res = self._get_all_plotted_xy(apply_selection=False)
+        if len(res) < 4 or len(res[0]) == 0: 
+            QMessageBox.warning(self, "No Data", "Please plot a 2D curve first.")
+            return
+            
+        # 1. Create the dialog as a floating, non-blocking palette
+        self.baseline_dlg = BaselineSubtractionDialog(self)
+        self.baseline_dlg.setWindowModality(Qt.NonModal) 
+        
+        # 2. Lock the data columns so the user doesn't break the background arrays while drawing
+        self.xcol.setEnabled(False)
+        self.ycol.setEnabled(False)
+        self.series_list.setEnabled(False)
+        
+        def restore_ui():
+            self.xcol.setEnabled(True)
+            self.ycol.setEnabled(True)
+            self.series_list.setEnabled(True)
+            if hasattr(self, 'phantom_curve'): self.phantom_curve.setVisible(False)
+            if hasattr(self, 'phantom_baseline_flattened'): self.phantom_baseline_flattened.setVisible(False)
+            
+        def on_accept():
+            restore_ui()
+            baseline_array = self.baseline_dlg.get_result()
+            x_full, y_full, _, pair = self._get_all_plotted_xy(apply_selection=False)
+            subtracted_data = y_full - baseline_array
+            
+            # --- Capture exact names ---
+            orig_x_name = pair.get('x_name', 'X')
+            new_y_name = f"{pair.get('y_name', 'Y')} (Baseline Subtracted)"
+            
+            try:
+                self._append_column_to_file(self.dataset.filename, new_y_name, [subtracted_data])
+                
+                opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+                self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
+                self.progress_dialog.setWindowModality(Qt.WindowModal)
+                self.progress_dialog.setCancelButton(None)
+                self.progress_dialog.setMinimumDuration(0)
+                self.progress_dialog.show()
+                QApplication.processEvents()
+                
+                def on_baseline_loaded(ds):
+                    # 1. Mute the default plot trigger!
+                    self._is_plotting = True 
+                    
+                    self._on_load_finished(ds, self.dataset.filename, opts)
+                    
+                    # 2. Release the mute
+                    self._is_plotting = False
+                    
+                    target_x_idx, target_y_idx = 0, 0
+                    
+                    # Search the dropdowns by exact name
+                    for i in range(self.xcol.count()):
+                        combo_text = self.xcol.itemText(i)
+                        actual_name = combo_text.split(": ", 1)[-1] if ": " in combo_text else combo_text
+                        
+                        if actual_name == orig_x_name: target_x_idx = i
+                        if actual_name == new_y_name: target_y_idx = i
+                            
+                    self.xcol.blockSignals(True)
+                    self.ycol.blockSignals(True)
+                    self.xcol.setCurrentIndex(target_x_idx)
+                    self.ycol.setCurrentIndex(target_y_idx)
+                    self.xcol.blockSignals(False)
+                    self.ycol.blockSignals(False)
+                    
+                    # 3. Fire the final, correct plot
+                    if self.series_data["2D"]: self.update_current_series()
+                    else: self.add_series_to_list()
+                
+                self.loader_thread = DataLoaderThread(self.dataset.filename, opts)
+                self.loader_thread.progress.connect(self._update_progress_ui)
+                self.loader_thread.finished.connect(on_baseline_loaded)
+                self.loader_thread.error.connect(self._on_load_error)
+                self.loader_thread.start()
+            except Exception as e:
+                QMessageBox.critical(self, "Write Error", f"Failed to save the baseline data:\n{e}")
+                
+        def on_reject():
+            restore_ui()
+            
+        # 3. Connect signals instead of halting execution
+        self.baseline_dlg.accepted.connect(on_accept)
+        self.baseline_dlg.rejected.connect(on_reject)
+        self.baseline_dlg.show()
 
     def _create_processed_column(self, config, pair):
         import scipy.signal as sig
@@ -1142,8 +1328,10 @@ class BadgerLoopQtGraph(QMainWindow):
         # Analysis Menu
         analysis_menu = menubar.addMenu("Analysis")
         analysis_menu.addAction("Signal Processing (Smooth / Calculus)").triggered.connect(self.open_signal_processing)
+        analysis_menu.addAction("Baseline Subtraction Tool").triggered.connect(self.open_baseline_subtraction)
         analysis_menu.addAction("Phase Space Generator (x vs dx/dt)").triggered.connect(self.open_phase_space_dialog)
         analysis_menu.addAction("Automated Peak Finder & iFFT Surgeon").triggered.connect(self.open_peak_finder)
+        analysis_menu.addAction("Area Under Curve (Definite Integral)").triggered.connect(self.open_area_under_curve)
         analysis_menu.addAction("Enclosed Loop Area Calculator").triggered.connect(self.open_loop_area_calculator)
         
         # Layout Menu
@@ -1648,6 +1836,19 @@ class BadgerLoopQtGraph(QMainWindow):
             QMessageBox.critical(self, "Fatal Execution Error", f"The math engine or file writer encountered a critical error:\n\n{e}\n\nTraceback:\n{traceback.format_exc()}")
 
     def _append_column_to_file(self, target_file, new_name, calculated_blocks):
+        # --- NEW: NATIVE HDF5 INTERCEPT ---
+        if self.file_type == "HDF5":
+            import h5py
+            if hasattr(self.dataset, 'file') and self.dataset.file:
+                try: self.dataset.file.close() # Free the Windows file lock
+                except: pass
+            with h5py.File(target_file, 'a') as f:
+                if new_name in f: del f[new_name]
+                data_to_write = np.concatenate(calculated_blocks) if len(calculated_blocks) > 1 else calculated_blocks[0]
+                f.create_dataset(new_name, data=data_to_write)
+            return
+        # ----------------------------------
+
         if self.file_type == "MultiCSV":
             delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
             if delim == "auto": delim = ","
@@ -1826,6 +2027,20 @@ class BadgerLoopQtGraph(QMainWindow):
                 f.writelines(out)
 
     def _rewrite_column_name_in_file(self, target_file, col_idx, new_name):
+        # --- NEW: NATIVE HDF5 INTERCEPT ---
+        if self.file_type == "HDF5":
+            import h5py
+            if hasattr(self.dataset, 'file') and self.dataset.file:
+                try: self.dataset.file.close()
+                except: pass
+            with h5py.File(target_file, 'a') as f:
+                old_name = self.dataset.column_names.get(col_idx)
+                if old_name and old_name in f:
+                    f[new_name] = f[old_name] # Copy to new name
+                    del f[old_name]           # Delete old name
+            return
+        # ----------------------------------
+
         if self.file_type == "MultiCSV":
             delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
             if delim == "auto": delim = ","
@@ -1951,6 +2166,19 @@ class BadgerLoopQtGraph(QMainWindow):
                 f.write("\n".join(out) + "\n")
 
     def _delete_column_in_file(self, target_file, col_idx):
+        # --- NEW: NATIVE HDF5 INTERCEPT ---
+        if self.file_type == "HDF5":
+            import h5py
+            if hasattr(self.dataset, 'file') and self.dataset.file:
+                try: self.dataset.file.close()
+                except: pass
+            with h5py.File(target_file, 'a') as f:
+                col_name = self.dataset.column_names.get(col_idx)
+                if col_name and col_name in f:
+                    del f[col_name]
+            return
+        # ----------------------------------
+
         if self.file_type == "MultiCSV":
             delim = getattr(self, 'last_load_opts', {}).get("delimiter", ",")
             if delim == "auto": delim = ","
@@ -3163,6 +3391,29 @@ class BadgerLoopQtGraph(QMainWindow):
         """)
         self.loop_stats_label.hide()
         # ---------------------------
+        # --- NEW: AREA UNDER CURVE HUD ---
+        self.auc_stats_label = DraggableLabel(self.plot_wrapper)
+        self.auc_stats_label.setStyleSheet("""
+            background-color: rgba(255, 245, 230, 230); 
+            border: 2px solid #ffaa00; 
+            border-radius: 6px; 
+            padding: 8px; 
+            font-family: Consolas, monospace;
+            font-size: 13px; 
+            color: #111;
+        """)
+        self.auc_stats_label.hide()
+        
+        self.toggle_auc_btn = QPushButton("Toggle Peak Areas")
+        self.toggle_auc_btn.setCheckable(True)
+        self.toggle_auc_btn.setChecked(True)
+        self.toggle_auc_btn.setStyleSheet("font-weight: bold; background-color: #fff0d0; border: 2px solid #ffaa00; border-radius: 4px; padding: 6px; color: #ff8800;")
+        self.toggle_auc_btn.setVisible(False) 
+        self.toggle_auc_btn.clicked.connect(self._toggle_auc_areas)
+        controls.addWidget(self.toggle_auc_btn)
+        
+        self.auc_data_records = []
+        # ---------------------------------
         
         self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
 
@@ -4340,6 +4591,12 @@ class BadgerLoopQtGraph(QMainWindow):
         self._is_plotting = True
         
         self._clear_final_loops()
+        # --- NEW ---
+        if hasattr(self, 'auc_data_records'): self.auc_data_records.clear()
+        if hasattr(self, '_clear_auc_visuals'): self._clear_auc_visuals()
+        if hasattr(self, 'auc_stats_label'): self.auc_stats_label.hide()
+        if hasattr(self, 'toggle_auc_btn'): self.toggle_auc_btn.setVisible(False)
+        # -----------
         
         if hasattr(self, 'clear_selection'): self.clear_selection()
         
@@ -5251,3 +5508,198 @@ class BadgerLoopQtGraph(QMainWindow):
             QMessageBox.information(self, "Export Complete", "Data successfully exported to CSV!")
         except PermissionError:
             QMessageBox.critical(self, "Export Failed", "Permission denied.\nPlease close the CSV file if it is open in Excel and try again.")
+
+    def open_area_under_curve(self):
+        if not self.dataset: return
+        
+        res = self._get_all_plotted_xy(apply_selection=False)
+        if len(res) < 4 or len(res[0]) == 0: 
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "No Data", "Please plot a 2D curve first.")
+            return
+
+        # 1. Create as non-modal floating palette
+        if hasattr(self, 'auc_dlg') and self.auc_dlg is not None:
+            try: self.auc_dlg.close()
+            except: pass
+            
+        self.auc_dlg = AreaUnderCurveDialog(self)
+        self.auc_dlg.setWindowModality(Qt.NonModal)
+        
+        def on_accept():
+            method = self.auc_dlg.get_result()
+            x_sel, y_sel, _, pair = self._get_all_plotted_xy(apply_selection=True)
+            if len(x_sel) < 3:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Not Enough Data", "Select a larger region of data to integrate.")
+                self.auc_dlg.show() # Pop it back up so they can try again
+                return
+            
+            self._calculate_and_shade_auc(x_sel, y_sel, method, pair)
+            self.clear_selection()
+            
+        def on_reject():
+            self.clear_selection()
+            
+        self.auc_dlg.accepted.connect(on_accept)
+        self.auc_dlg.rejected.connect(on_reject)
+        self.auc_dlg.show()
+        
+    def _activate_auc_line_tool(self, dialog_ref):
+        import pyqtgraph as pg
+        import numpy as np
+        from PyQt5.QtWidgets import QPushButton
+        
+        x_full, y_full, _, _ = self._get_all_plotted_xy(apply_selection=False)
+        if len(x_full) == 0: return
+        
+        x_min, x_max = np.min(x_full), np.max(x_full)
+        y_min = np.min(y_full)
+        
+        # Place a line spanning the middle 50% of the data
+        pts = [[x_min + (x_max-x_min)*0.25, y_min], [x_max - (x_max-x_min)*0.25, y_min]]
+        self.auc_manual_roi = pg.LineSegmentROI(pts, pen=pg.mkPen('g', width=3))
+        self.plot_widget.addItem(self.auc_manual_roi)
+        
+        self.auc_done_btn = QPushButton("✅ Apply Line", self.plot_wrapper)
+        self.auc_done_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; padding: 8px; border-radius: 4px;")
+        self.auc_done_btn.move(20, 20)
+        self.auc_done_btn.show()
+        
+        def on_done():
+            self.auc_done_btn.hide()
+            self.auc_done_btn.deleteLater()
+            
+            # 1. Extract endpoints from the ROI handles
+            handles = self.auc_manual_roi.getSceneHandlePositions()
+            pt0 = self.plot_widget.getViewBox().mapSceneToView(handles[0][1])
+            pt1 = self.plot_widget.getViewBox().mapSceneToView(handles[1][1])
+            x0, y0 = pt0.x(), pt0.y()
+            x1, y1 = pt1.x(), pt1.y()
+            
+            self.plot_widget.removeItem(self.auc_manual_roi)
+            
+            # 2. Sort the line endpoints left-to-right
+            lx = np.array([x0, x1])
+            ly = np.array([y0, y1])
+            sort_idx = np.argsort(lx)
+            lx, ly = lx[sort_idx], ly[sort_idx]
+            
+            # 3. Find all data points between X bounds, whose Y is ABOVE the line
+            mask = (x_full >= lx[0]) & (x_full <= lx[1])
+            interp_y = np.interp(x_full[mask], lx, ly)
+            above_mask = y_full[mask] >= interp_y
+            
+            # 4. Save global indices and highlight
+            global_indices = np.where(mask)[0][above_mask]
+            self.selected_indices = set(global_indices)
+            
+            if self.selected_indices:
+                idx_array = list(self.selected_indices)
+                self.highlight_scatter.setData(x_full[idx_array], y_full[idx_array])
+                self.highlight_scatter.show()
+                self._update_selection_stats()
+            else:
+                self.clear_selection()
+            
+            dialog_ref._finish_selection()
+            
+        self.auc_done_btn.clicked.connect(on_done)
+
+    def _calculate_and_shade_auc(self, x_sel, y_sel, method, pair):
+        # 1. Sort the data chronologically (left to right)
+        sort_idx = np.argsort(x_sel)
+        x = x_sel[sort_idx]
+        y = y_sel[sort_idx]
+        
+        # 2. Generate the Baseline Array
+        if method == "zero":
+            y_base = np.zeros_like(y)
+        elif method == "min":
+            y_base = np.full_like(y, np.min(y))
+        elif method == "endpoints":
+            # Draw a straight line between the first and last point
+            y_base = np.interp(x, [x[0], x[-1]], [y[0], y[-1]])
+            
+        # 3. Calculate Area (Integral of Data minus Integral of Baseline)
+        try: area = np.trapezoid(y - y_base, x=x)
+        except AttributeError: area = np.trapz(y - y_base, x=x)
+        
+        # 4. Generate Polygon Coordinates (Loop up the curve, then back down the baseline)
+        poly_x = np.concatenate([x, x[::-1]])
+        poly_y = np.concatenate([y, y_base[::-1]])
+        
+        # 5. Save the data to memory
+        self.auc_data_records.append({
+            "poly_x": poly_x, "poly_y": poly_y, 
+            "area": area, "method": method, 
+            "axis_side": pair.get("axis", "L")
+        })
+        
+        self._redraw_auc_shades()
+
+    def _redraw_auc_shades(self):
+        self._clear_auc_visuals()
+        if not hasattr(self, 'auc_items'): self.auc_items = []
+        if not self.auc_data_records: return
+        
+        from PyQt5.QtWidgets import QGraphicsPolygonItem
+        from PyQt5.QtGui import QPolygonF
+        from PyQt5.QtCore import QPointF
+        import pyqtgraph as pg
+        
+        total_area = 0.0
+        html = f"<b style='color: #ffaa00; font-size: 14px;'>Integrals (Area Under Curve)</b><br><hr style='border: 0; border-top: 1px solid #ccc; margin: 4px 0;'>"
+        
+        for i, rec in enumerate(self.auc_data_records):
+            area = rec['area']
+            total_area += area
+            method_str = "Local Slant" if rec['method'] == 'endpoints' else "Min-Y" if rec['method'] == 'min' else "y=0"
+            html += f"<b>Peak {i+1} ({method_str}):</b> {area:.5g}<br>"
+            
+            # Use distinct orange/yellow shading
+            color = (255, 170, 0, 80) 
+            border = (255, 170, 0, 200)
+            
+            polygon = QPolygonF([QPointF(float(px), float(py)) for px, py in zip(rec['poly_x'], rec['poly_y'])])
+            item = QGraphicsPolygonItem(polygon)
+            item.setPen(pg.mkPen(border, width=2))
+            item.setBrush(pg.mkBrush(color))
+            item.setZValue(-5) # Sit perfectly behind the data line
+            
+            target_vb = self.vb_right if rec['axis_side'] == "R" else self.plot_widget
+            target_vb.addItem(item)
+            self.auc_items.append((item, target_vb))
+            
+        html += f"<hr style='border: 0; border-top: 1px solid #ccc; margin: 4px 0;'>"
+        html += f"<b>Total Area:</b>&nbsp;&nbsp;{total_area:.5g}"
+        
+        self.auc_stats_label.setText(html)
+        self.auc_stats_label.adjustSize()
+        if not self.auc_stats_label.isVisible():
+            self.auc_stats_label.move(20, 100) # Move slightly lower so it doesn't overlap the Region Stats
+            self.auc_stats_label.show()
+            self.auc_stats_label.raise_()
+            
+        self.toggle_auc_btn.setVisible(True)
+        self.toggle_auc_btn.setChecked(True)
+        self.toggle_auc_btn.setStyleSheet("font-weight: bold; background-color: #fff0d0; border: 2px solid #ffaa00; border-radius: 4px; padding: 6px; color: #ff8800;")
+
+    def _clear_auc_visuals(self):
+        if hasattr(self, 'auc_items'):
+            for item, vb in self.auc_items:
+                try: vb.removeItem(item)
+                except: pass
+            self.auc_items.clear()
+
+    def _toggle_auc_areas(self):
+        is_checked = self.toggle_auc_btn.isChecked()
+        if is_checked:
+            self.toggle_auc_btn.setStyleSheet("font-weight: bold; background-color: #fff0d0; border: 2px solid #ffaa00; border-radius: 4px; padding: 6px; color: #ff8800;")
+            if self.auc_data_records: self.auc_stats_label.show()
+        else:
+            self.toggle_auc_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+            self.auc_stats_label.hide()
+            
+        for item, _ in getattr(self, 'auc_items', []):
+            item.setVisible(is_checked)
