@@ -1236,15 +1236,23 @@ class BaselineSubtractionDialog(QDialog):
         except: pass
 
         py_equation = py_equation.replace('^', '**')
-        math_funcs = ['arcsinh','arccosh','arctanh','arcsin','arccos','arctan','sinh','cosh','tanh','sin','cos','tan','exp']
+        # --- NEW: ADDED 'abs' TO LIST ---
+        math_funcs = ['arcsinh','arccosh','arctanh','arcsin','arccos','arctan','sinh','cosh','tanh','sin','cos','tan','exp', 'abs']
         for f in math_funcs:
             py_equation = re.sub(r'\b' + f + r'\s*\(', 'np.'+f+'(', py_equation, flags=re.IGNORECASE)
         py_equation = re.sub(r'\blog_?10\s*\(', 'np.log10(', py_equation, flags=re.IGNORECASE)
         py_equation = re.sub(r'\bln\s*\(', 'np.log(', py_equation, flags=re.IGNORECASE)
 
+        # --- NEW: NORM ENGINE ---
+        def norm_func(v):
+            arr = np.asarray(v, dtype=np.float64)
+            m = np.max(arr)
+            return arr / m if m != 0 else arr
+        # ------------------------
+
         try:
-            # Test run the math with a dummy value
-            env = {"np": np, "e": np.e, "pi": np.pi, "x": np.ones(1)}
+            # Test run the math with a dummy value (inject norm_func!)
+            env = {"np": np, "e": np.e, "pi": np.pi, "x": np.ones(1), "norm": norm_func}
             with np.errstate(all='ignore'): eval(py_equation, {"__builtins__": {}}, env)
             self.is_valid = True
             self.parsed_equation = py_equation
@@ -1282,7 +1290,8 @@ class BaselineSubtractionDialog(QDialog):
             func = re.sub(r'_?([0-9]+)', r"<sub style='font-size:12px;'>\1</sub>", func)
             funcs.append(f"<span style='font-style: normal; font-weight: bold; color: #222;'>{func}</span>")
             return f"__FUNC{len(funcs)-1}__"
-        html_text = re.sub(r'\b(arcsin|arccos|arctan|arcsinh|arccosh|arctanh|sinh|cosh|tanh|sin|cos|tan|ln|log(?:_?[0-9]+)?|exp)\b', func_repl, html_text, flags=re.IGNORECASE)
+        # --- NEW: ADDED abs AND norm TO REGEX ---
+        html_text = re.sub(r'\b(arcsin|arccos|arctan|arcsinh|arccosh|arctanh|sinh|cosh|tanh|sin|cos|tan|ln|log(?:_?[0-9]+)?|exp|abs|norm)\b', func_repl, html_text, flags=re.IGNORECASE)
 
         def tokenize_to_horizontal(text, f_size):
             parts = re.split(r'(__FUNC\d+__|__PAREN\d+__|__EXP\d+__|__CONST\d+__|__XVAR\d+__)', text)
@@ -1462,7 +1471,15 @@ class BaselineSubtractionDialog(QDialog):
                 
         elif tab_idx == 2: # Custom Equation
             if not self.is_valid: return
-            env = {"np": np, "e": np.e, "pi": np.pi, "x": self.x}
+            
+            # --- NEW: NORM ENGINE ---
+            def norm_func(v):
+                arr = np.asarray(v, dtype=np.float64)
+                m = np.max(arr)
+                return arr / m if m != 0 else arr
+            # ------------------------
+            
+            env = {"np": np, "e": np.e, "pi": np.pi, "x": self.x, "norm": norm_func}
             try:
                 yfit = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
                 if yfit.ndim == 0: yfit = np.full_like(self.x, float(yfit))
