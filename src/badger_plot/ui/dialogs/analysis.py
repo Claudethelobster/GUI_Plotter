@@ -3,15 +3,111 @@ import os
 import numpy as np
 import scipy.signal as sig
 import scipy.integrate as intg
+import re
+import pyqtgraph as pg
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QComboBox,
     QCheckBox, QLabel, QPushButton, QSpinBox, QTableWidget, QHeaderView,
-    QAbstractItemView, QGroupBox, QButtonGroup, QMessageBox, QApplication, QProgressDialog, QListWidget, QListWidgetItem
+    QAbstractItemView, QGroupBox, QButtonGroup, QMessageBox, QApplication,
+    QProgressDialog, QListWidget, QListWidgetItem, QTabWidget, QScrollArea,
+    QTextEdit, QWidget, QRadioButton
 )
-
+from badger_plot.core.constants import PHYSICS_CONSTANTS, GREEK_MAP
 from core.data_loader import DataLoaderThread
+
+class AreaUnderCurveDialog(QDialog):
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.main_window = main_window
+        self.setWindowTitle("Area Under Curve Integration")
+        self.setMinimumWidth(350)
+        layout = QVBoxLayout(self)
+
+        # --- STEP 1: SELECTION TOOLS ---
+        layout.addWidget(QLabel("<b>1. Select Data to Integrate:</b>"))
+        sel_layout = QHBoxLayout()
+        
+        self.btn_box = QPushButton("⬛ Draw Box")
+        self.btn_box.clicked.connect(self._activate_box)
+        
+        self.btn_line = QPushButton("📏 Draw Line")
+        self.btn_line.clicked.connect(self._activate_line)
+        
+        sel_layout.addWidget(self.btn_box)
+        sel_layout.addWidget(self.btn_line)
+        layout.addLayout(sel_layout)
+
+        self.lbl_points = QLabel("Selected points: 0")
+        self.lbl_points.setStyleSheet("color: #d90000; font-weight: bold;")
+        layout.addWidget(self.lbl_points)
+
+        # --- STEP 2: BASELINE OPTIONS ---
+        layout.addSpacing(10)
+        layout.addWidget(QLabel("<b>2. Select Baseline Method:</b><br>How should the bottom of the peak be bounded?"))
+
+        self.btn_endpoints = QRadioButton("Connect Endpoints (Local Slant)")
+        self.btn_min = QRadioButton("Minimum Y-Value in Selection (Flat)")
+        self.btn_zero = QRadioButton("Absolute Zero (y = 0)")
+        self.btn_endpoints.setChecked(True) 
+
+        self.bg = QButtonGroup()
+        self.bg.addButton(self.btn_endpoints, 0)
+        self.bg.addButton(self.btn_min, 1)
+        self.bg.addButton(self.btn_zero, 2)
+
+        layout.addWidget(self.btn_endpoints)
+        layout.addWidget(self.btn_min)
+        layout.addWidget(self.btn_zero)
+        
+        layout.addSpacing(10)
+
+        # --- STEP 3: ACTION BUTTONS ---
+        btn_box_layout = QHBoxLayout()
+        self.ok_btn = QPushButton("Calculate Area")
+        self.ok_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        self.ok_btn.clicked.connect(self.accept)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_box_layout.addStretch()
+        btn_box_layout.addWidget(cancel_btn)
+        btn_box_layout.addWidget(self.ok_btn)
+        layout.addLayout(btn_box_layout)
+        
+        self.update_points_label()
+
+    def update_points_label(self):
+        count = len(getattr(self.main_window, 'selected_indices', set()))
+        self.lbl_points.setText(f"Selected points: {count}")
+        self.lbl_points.setStyleSheet("color: #2ca02c; font-weight: bold;" if count > 2 else "color: #d90000; font-weight: bold;")
+        self.ok_btn.setEnabled(count > 2)
+
+    def _activate_box(self):
+        self.hide() # Auto-hide palette
+        self.main_window.btn_box.setChecked(True)
+        self.main_window._set_interaction_mode(self.main_window.btn_box)
+        
+        # Hand the main window our callback function
+        self.main_window._on_selection_finished_cb = self._finish_selection
+
+
+    def _activate_line(self):
+        self.hide() # Auto-hide palette
+        self.main_window._activate_auc_line_tool(self)
+
+    def _finish_selection(self):
+        self.update_points_label()
+        self.show()
+        self.raise_()
+
+    def get_result(self):
+        idx = self.bg.checkedId()
+        if idx == 0: return "endpoints"
+        if idx == 1: return "min"
+        if idx == 2: return "zero"
 
 class LoopAreaDialog(QDialog):
     def __init__(self, main_window):
@@ -982,3 +1078,419 @@ class PeakFinderTool(QDialog):
         if hasattr(self, 'selection_timer') and not self.selection_timer.isActive():
             self.selection_timer.start(200)
         super().showEvent(event)
+        
+class BaselineSubtractionDialog(QDialog):
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.main_window = main_window
+        self.setWindowTitle("Baseline Subtraction Tool")
+        self.setMinimumSize(800, 650)
+        
+        # Grab current data
+        res = main_window._get_all_plotted_xy(apply_selection=False)
+        if len(res) < 4 or len(res[0]) == 0:
+            raise ValueError("No valid 2D data to analyze.")
+            
+        self.x, self.y, self.aux_dict, self.pair = res
+        
+        # Setup phantom curves for live preview
+        if not hasattr(self.main_window, 'phantom_curve'):
+            self.main_window.phantom_curve = pg.PlotCurveItem(pen=pg.mkPen("r", width=2, style=Qt.DashLine))
+            self.main_window.plot_widget.addItem(self.main_window.phantom_curve)
+            
+        if not hasattr(self.main_window, 'phantom_baseline_flattened'):
+            self.main_window.phantom_baseline_flattened = pg.PlotCurveItem(pen=pg.mkPen("m", width=2))
+            self.main_window.plot_widget.addItem(self.main_window.phantom_baseline_flattened)
+            self.main_window.phantom_baseline_flattened.hide()
+
+        self.current_baseline = np.zeros_like(self.y)
+        
+        self._build_ui()
+        self._update_preview()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+        
+        # --- TAB 1: Asymmetric Least Squares (ALS) ---
+        tab_als = QWidget()
+        als_layout = QVBoxLayout(tab_als)
+        als_layout.addWidget(QLabel("<b>Asymmetric Least Squares (ALS)</b><br>"
+                                    "Automatically wraps a stiff curve underneath peaks. Great for spectroscopy and chromatography."))
+        
+        form_als = QFormLayout()
+        self.als_lam_edit = QLineEdit("100000")
+        self.als_lam_edit.setToolTip("Smoothness (λ): Usually between 10^2 to 10^9")
+        self.als_p_edit = QLineEdit("0.01")
+        self.als_p_edit.setToolTip("Asymmetry (p): Usually between 0.001 and 0.1")
+        
+        form_als.addRow("Smoothness (λ):", self.als_lam_edit)
+        form_als.addRow("Asymmetry (p):", self.als_p_edit)
+        als_layout.addLayout(form_als)
+        
+        btn_calc_als = QPushButton("Calculate ALS Baseline")
+        btn_calc_als.clicked.connect(self._update_preview)
+        als_layout.addWidget(btn_calc_als)
+        als_layout.addStretch()
+        self.tabs.addTab(tab_als, "Auto (ALS)")
+        
+        # --- TAB 2: Spline / Anchor Points ---
+        tab_spline = QWidget()
+        spline_layout = QVBoxLayout(tab_spline)
+        spline_layout.addWidget(QLabel("<b>Spline Interpolation & Manual Lines</b><br>"
+                                       "Select background points with the Lasso, or draw an interactive bendable line."))
+                                       
+        lasso_layout = QHBoxLayout()
+        btn_activate_lasso = QPushButton("🖌️ Select Data (Lasso)")
+        btn_activate_lasso.clicked.connect(self._activate_lasso)
+        
+        btn_manual_line = QPushButton("📏 Draw Manual Line")
+        btn_manual_line.clicked.connect(self._activate_manual_polyline)
+        
+        lasso_layout.addWidget(btn_activate_lasso)
+        lasso_layout.addWidget(btn_manual_line)
+        spline_layout.addLayout(lasso_layout)
+        
+        self.anchor_lbl = QLabel("Active Anchors: 0 points")
+        spline_layout.addWidget(self.anchor_lbl)
+        
+        btn_calc_spline = QPushButton("Calculate Spline Baseline")
+        btn_calc_spline.clicked.connect(self._update_preview)
+        spline_layout.addWidget(btn_calc_spline)
+        
+        self.spline_x, self.spline_y = np.array([]), np.array([])
+        spline_layout.addStretch()
+        self.tabs.addTab(tab_spline, "Spline / Manual Line")
+        
+        # --- TAB 3: Custom Equation ---
+        tab_eq = QWidget()
+        eq_layout = QVBoxLayout(tab_eq)
+        eq_layout.addWidget(QLabel("<b>Custom Mathematical Background</b><br>"
+                                   "Type a function (e.g., linear drift or exponential decay) to subtract."))
+        
+        self._build_custom_equation_ui(eq_layout)
+        self.tabs.addTab(tab_eq, "Custom Equation")
+        
+        # --- GLOBAL PREVIEW CONTROLS ---
+        layout.addSpacing(10)
+        preview_layout = QHBoxLayout()
+        self.preview_btn = QPushButton("Toggle Flattened Preview")
+        self.preview_btn.setCheckable(True)
+        self.preview_btn.clicked.connect(self._toggle_flattened_preview)
+        preview_layout.addWidget(self.preview_btn)
+        layout.addLayout(preview_layout)
+        
+        # --- BOTTOM BUTTONS ---
+        btn_box = QHBoxLayout()
+        ok_btn = QPushButton("Subtract & Create Column")
+        ok_btn.setStyleSheet("font-weight: bold; color: #2ca02c; padding: 6px;")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_box.addStretch()
+        btn_box.addWidget(cancel_btn)
+        btn_box.addWidget(ok_btn)
+        layout.addLayout(btn_box)
+        
+        self.tabs.currentChanged.connect(self._update_preview)
+
+    def _build_custom_equation_ui(self, layout):
+        btn_layout = QHBoxLayout()
+        btn_x = QPushButton("x (Independent Variable)")
+        btn_x.setStyleSheet("color: #d90000; font-weight: bold; border: 1px solid #d90000; padding: 4px;")
+        btn_x.clicked.connect(lambda: self.equation_input.textCursor().insertText("x"))
+        btn_layout.addWidget(btn_x)
+        layout.addLayout(btn_layout)
+
+        self.equation_input = QTextEdit()
+        self.equation_input.setMaximumHeight(60)
+        self.equation_input.setFont(QFont("Consolas", 11))
+        self.equation_input.setPlaceholderText("e.g. 0.05 * x + 1.2")
+        self.equation_input.textChanged.connect(self._validate_custom_equation)
+        layout.addWidget(self.equation_input)
+
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setStyleSheet("background-color: white; border: 1px solid #ccc; font-size: 18px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
+        self.preview_label.setMinimumHeight(60)
+        layout.addWidget(self.preview_label)
+
+        self.parsed_equation = ""
+        self.is_valid = False
+        layout.addStretch()
+
+    def _validate_custom_equation(self):
+        raw_text = self.equation_input.toPlainText().strip()
+        if not raw_text:
+            self.preview_label.setText("")
+            self.is_valid = False
+            self.parsed_equation = ""
+            self._update_preview()
+            return
+
+        # 1. Parse and Validate Math
+        py_equation = raw_text
+        try: py_equation = re.sub(r'\{\\(.*?)\}', lambda m: f"({PHYSICS_CONSTANTS[m.group(1)]['value']})", py_equation)
+        except: pass
+
+        py_equation = py_equation.replace('^', '**')
+        math_funcs = ['arcsinh','arccosh','arctanh','arcsin','arccos','arctan','sinh','cosh','tanh','sin','cos','tan','exp']
+        for f in math_funcs:
+            py_equation = re.sub(r'\b' + f + r'\s*\(', 'np.'+f+'(', py_equation, flags=re.IGNORECASE)
+        py_equation = re.sub(r'\blog_?10\s*\(', 'np.log10(', py_equation, flags=re.IGNORECASE)
+        py_equation = re.sub(r'\bln\s*\(', 'np.log(', py_equation, flags=re.IGNORECASE)
+
+        try:
+            # Test run the math with a dummy value
+            env = {"np": np, "e": np.e, "pi": np.pi, "x": np.ones(1)}
+            with np.errstate(all='ignore'): eval(py_equation, {"__builtins__": {}}, env)
+            self.is_valid = True
+            self.parsed_equation = py_equation
+        except Exception:
+            self.is_valid = False
+            self.preview_label.setText("<span style='color: red;'>Invalid Syntax (or missing variables)</span>")
+            self._update_preview()
+            return
+
+        # 2. Render Beautiful HTML
+        html_text = raw_text
+        
+        consts = []
+        def const_repl(m):
+            c_key = m.group(1)
+            if c_key in PHYSICS_CONSTANTS:
+                c_html = PHYSICS_CONSTANTS[c_key]["html"]
+                span = f"<span style='color: #2ca02c; font-weight: bold; font-style: normal;'>{c_html}</span>"
+            else: span = f"<span style='color: red;'>{{\\{c_key}}}</span>"
+            consts.append(span); return f"__CONST{len(consts)-1}__"
+        html_text = re.sub(r'\{\\(.*?)\}', const_repl, html_text)
+
+        xvars = []
+        def x_repl(m):
+            xvars.append("<span style='color: #d90000; font-weight: bold; font-style: italic;'>x</span>")
+            return f"__XVAR{len(xvars)-1}__"
+        html_text = re.sub(r'\bx\b', x_repl, html_text)
+        
+        html_text = html_text.replace('*', '&middot;').replace('-', '&minus;')
+        html_text = re.sub(r'\bpi\b', 'π', html_text) 
+        
+        funcs = []
+        def func_repl(m):
+            func = m.group(1).lower()
+            func = re.sub(r'_?([0-9]+)', r"<sub style='font-size:12px;'>\1</sub>", func)
+            funcs.append(f"<span style='font-style: normal; font-weight: bold; color: #222;'>{func}</span>")
+            return f"__FUNC{len(funcs)-1}__"
+        html_text = re.sub(r'\b(arcsin|arccos|arctan|arcsinh|arccosh|arctanh|sinh|cosh|tanh|sin|cos|tan|ln|log(?:_?[0-9]+)?|exp)\b', func_repl, html_text, flags=re.IGNORECASE)
+
+        def tokenize_to_horizontal(text, f_size):
+            parts = re.split(r'(__FUNC\d+__|__PAREN\d+__|__EXP\d+__|__CONST\d+__|__XVAR\d+__)', text)
+            row_html = "<table style='display:inline-table; border-collapse: collapse; margin: 0;'><tr>"
+            for p in parts:
+                if not p: continue
+                row_html += f"<td style='vertical-align:middle; padding:0; white-space:nowrap; font-size:{f_size};'>{p}</td>"
+            return row_html + "</tr></table>"
+
+        exps = []
+        def resolve_exponents(text, is_exp=False):
+            f_size_base, f_size_exp = ("15px", "10px") if is_exp else ("22px", "15px")
+            spacer = "6px" if is_exp else "10px"
+            while True:
+                match = re.search(r'([a-zA-Zπ]+|[0-9\.]+|__PAREN\d+__|__FUNC\d+__|__EXP\d+__|__CONST\d+__|__XVAR\d+__)\s*\^\s*(-?[a-zA-Zπ]+|-?[0-9\.]+|__PAREN\d+__|__FUNC\d+__|__EXP\d+__|__CONST\d+__|__XVAR\d+__)', text)
+                if not match: break
+                base, exp = match.group(1), match.group(2)
+                table = f"<table style='display:inline-table; border-collapse:collapse; margin: 0;'><tr><td style='vertical-align:bottom; padding:0; padding-right:1px; font-size:{f_size_base};'>{base}</td><td style='vertical-align:top; padding:0;'><table style='border-collapse:collapse; margin:0; padding:0;'><tr><td style='vertical-align:top; padding:0; font-size:{f_size_exp};'>{exp}</td></tr><tr><td style='font-size:{spacer}; padding:0;'>&nbsp;</td></tr></table></td></tr></table>"
+                exps.append(table); text = text[:match.start()] + f"__EXP{len(exps)-1}__" + text[match.end():]
+            return text
+
+        parens = []
+        def process_math_block(text, is_exp=False, has_parens=False):
+            f_size, p_size = ("15px", "130%") if is_exp else ("22px", "130%")
+            if '/' not in text:
+                res = tokenize_to_horizontal(text, f_size)
+                return f"<table style='display:inline-table; border-collapse:collapse; margin:0;'><tr><td style='vertical-align:middle; font-size:{f_size}; padding:0; color:#222;'>(</td><td style='vertical-align:middle; padding:0;'>{res}</td><td style='vertical-align:middle; font-size:{f_size}; padding:0; color:#222;'>)</td></tr></table>" if has_parens else res
+            parts = text.split('/')
+            res = tokenize_to_horizontal(parts[0].strip() or "&nbsp;", f_size)
+            for p in parts[1:]:
+                den = tokenize_to_horizontal(p.strip() or "&nbsp;", f_size)
+                res = f"<table style='display:inline-table; vertical-align:middle; border-collapse:collapse; margin: 0 1px;'><tr><td rowspan='2' style='vertical-align:middle; font-size:{p_size}; padding: 0; color:#222;'>{'(' if has_parens else ''}</td><td style='border-bottom:1px solid black; padding: 0 2px; text-align:center; vertical-align:bottom; font-size:{f_size};'>{res}</td><td rowspan='2' style='vertical-align:middle; font-size:{p_size}; padding: 0; color:#222;'>{')' if has_parens else ''}</td></tr><tr><td style='padding: 0 2px; text-align:center; vertical-align:top; font-size:{f_size};'>{den}</td></tr></table>"
+                has_parens = False
+            return res
+
+        while True:
+            match = re.search(r'(\^?)\(([^()]*)\)', html_text)
+            if not match: break
+            is_e, inner = (match.group(1) == '^'), match.group(2)
+            inner = resolve_exponents(inner, is_exp=is_e)
+            parens.append(process_math_block(inner, is_exp=is_e, has_parens=True))
+            html_text = html_text[:match.start()] + ( '^' if is_e else '' ) + f"__PAREN{len(parens)-1}__" + html_text[match.end():]
+            
+        html_text = resolve_exponents(html_text, is_exp=False)
+        html_text = process_math_block(html_text, is_exp=False, has_parens=False)
+        
+        for _ in range(15):
+            if not re.search(r'__(EXP|PAREN|FUNC|CONST|XVAR)\d+__', html_text): break
+            for i in range(len(exps)): html_text = html_text.replace(f"__EXP{i}__", exps[i])
+            for i in range(len(parens)): html_text = html_text.replace(f"__PAREN{i}__", parens[i])
+            for i in range(len(funcs)): html_text = html_text.replace(f"__FUNC{i}__", funcs[i])
+            for i in range(len(consts)): html_text = html_text.replace(f"__CONST{i}__", consts[i])
+            for i in range(len(xvars)): html_text = html_text.replace(f"__XVAR{i}__", xvars[i])
+            
+        self.preview_label.setText(f"<span style='font-size: 22px; font-family: Cambria, serif; font-style: italic;'>y = {html_text}</span>")
+        self._update_preview()
+
+    def _capture_spline_anchors(self):
+        sel_indices = getattr(self.main_window, 'selected_indices', set())
+        if not sel_indices:
+            QMessageBox.warning(self, "No Selection", "Draw a box/lasso to select baseline points first.")
+            return
+            
+        valid_indices = sorted([i for i in sel_indices if i < len(self.x)])
+        self.spline_x = self.x[valid_indices]
+        self.spline_y = self.y[valid_indices]
+        self.anchor_lbl.setText(f"Active Anchors: {len(self.spline_x)} points")
+        self.main_window.clear_selection()
+        self._update_preview()
+        
+    def _activate_lasso(self):
+        self.hide() # Auto-hide window
+        self.main_window.btn_lasso.setChecked(True)
+        self.main_window._set_interaction_mode(self.main_window.btn_lasso)
+        
+        # Hand the main window our callback function
+        self.main_window._on_selection_finished_cb = self._finish_lasso
+        
+        
+    def _finish_lasso(self):
+        self.show()
+        self.raise_()
+        self._capture_spline_anchors()
+
+    def _capture_spline_anchors(self):
+        sel_indices = getattr(self.main_window, 'selected_indices', set())
+        if not sel_indices:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "No Selection", "Draw a box/lasso to select baseline points first.")
+            return
+            
+        valid_indices = sorted([i for i in sel_indices if i < len(self.x)])
+        self.spline_x = self.x[valid_indices]
+        self.spline_y = self.y[valid_indices]
+        self.anchor_lbl.setText(f"Active Anchors: {len(self.spline_x)} points")
+        self.main_window.clear_selection()
+        self._update_preview()
+
+    def _activate_manual_polyline(self):
+        self.hide() # Auto-hide window
+        
+        # Calculate bounds to place the initial straight line
+        x_min, x_max = np.min(self.x), np.max(self.x)
+        y_min = np.min(self.y)
+        
+        # Initialize a 3-point bendable line
+        pts = [[x_min, y_min], [(x_min+x_max)/2.0, y_min], [x_max, y_min]]
+        self.manual_roi = pg.PolyLineROI(pts, pen=pg.mkPen('g', width=3), closed=False, removable=True)
+        self.main_window.plot_widget.addItem(self.manual_roi)
+        
+        # Add a floating "Done" button directly to the plot screen
+        self.done_btn = QPushButton("✅ Apply Line", self.main_window.plot_wrapper)
+        self.done_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; padding: 8px; border-radius: 4px;")
+        self.done_btn.move(20, 20)
+        self.done_btn.show()
+        
+        def on_done():
+            self.done_btn.hide()
+            self.done_btn.deleteLater()
+            
+            # Extract true coordinates from the ROI handles
+            pts = self.manual_roi.saveState()['points']
+            pos = self.manual_roi.pos()
+            self.spline_x = np.array([p[0] + pos.x() for p in pts])
+            self.spline_y = np.array([p[1] + pos.y() for p in pts])
+            
+            # Cleanup UI
+            self.main_window.plot_widget.removeItem(self.manual_roi)
+            self.anchor_lbl.setText(f"Active Anchors: {len(self.spline_x)} (Manual Line)")
+            
+            self.show()
+            self.raise_()
+            self._update_preview()
+            
+        self.done_btn.clicked.connect(on_done)
+
+    def _calc_als(self, y, lam, p, niter=10):
+        from scipy import sparse
+        from scipy.sparse.linalg import spsolve
+        L = len(y)
+        D = sparse.diags([1,-2,1], [0,-1,-2], shape=(L,L-2))
+        D = lam * D.dot(D.transpose())
+        w = np.ones(L)
+        for i in range(niter):
+            W = sparse.spdiags(w, 0, L, L)
+            Z = W + D
+            z = spsolve(Z, w*y)
+            w = p * (y > z) + (1-p) * (y < z)
+        return z
+
+    def _update_preview(self, *args):
+        tab_idx = self.tabs.currentIndex()
+        
+        if tab_idx == 0: # ALS
+            try:
+                lam = float(self.als_lam_edit.text())
+                p = float(self.als_p_edit.text())
+                self.current_baseline = self._calc_als(self.y, lam, p)
+            except Exception: return
+            
+        elif tab_idx == 1: # Spline
+            if len(self.spline_x) < 2:
+                self.current_baseline = np.zeros_like(self.y)
+                return
+            import scipy.interpolate
+            # Sort anchors chronologically
+            sort_idx = np.argsort(self.spline_x)
+            sx, sy = self.spline_x[sort_idx], self.spline_y[sort_idx]
+            
+            # Linear interp outside bounds, cubic inside (if enough points)
+            try:
+                k = min(3, len(sx) - 1)
+                tck = scipy.interpolate.splrep(sx, sy, k=k)
+                self.current_baseline = scipy.interpolate.splev(self.x, tck)
+            except Exception:
+                self.current_baseline = np.interp(self.x, sx, sy)
+                
+        elif tab_idx == 2: # Custom Equation
+            if not self.is_valid: return
+            env = {"np": np, "e": np.e, "pi": np.pi, "x": self.x}
+            try:
+                yfit = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
+                if yfit.ndim == 0: yfit = np.full_like(self.x, float(yfit))
+                self.current_baseline = yfit
+            except Exception: return
+            
+        # Draw the red baseline curve
+        self.main_window.phantom_curve.setData(self.x, self.current_baseline)
+        self.main_window.phantom_curve.setVisible(not self.preview_btn.isChecked())
+        
+        # Draw the flattened preview (magenta)
+        subtracted = self.y - self.current_baseline
+        self.main_window.phantom_baseline_flattened.setData(self.x, subtracted)
+        self.main_window.phantom_baseline_flattened.setVisible(self.preview_btn.isChecked())
+
+    def _toggle_flattened_preview(self):
+        self._update_preview()
+        if self.preview_btn.isChecked():
+            self.preview_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff;")
+            self.preview_btn.setText("View Original Data + Baseline")
+        else:
+            self.preview_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a;")
+            self.preview_btn.setText("Toggle Flattened Preview")
+
+    def closeEvent(self, event):
+        if hasattr(self.main_window, 'phantom_curve'): self.main_window.phantom_curve.setVisible(False)
+        if hasattr(self.main_window, 'phantom_baseline_flattened'): self.main_window.phantom_baseline_flattened.setVisible(False)
+        super().closeEvent(event)
+        
+    def get_result(self):
+        return self.current_baseline
