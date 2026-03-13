@@ -764,7 +764,8 @@ class CreateColumnDialog(QDialog):
 
         py_equation = py_equation.replace('^', '**')
         
-        math_funcs = ['arcsinh','arccosh','arctanh','arcsin','arccos','arctan','sinh','cosh','tanh','sin','cos','tan']
+        # --- NEW: ADDED 'abs' TO LIST ---
+        math_funcs = ['arcsinh','arccosh','arctanh','arcsin','arccos','arctan','sinh','cosh','tanh','sin','cos','tan', 'abs']
         for f in math_funcs:
             py_equation = re.sub(r'\b' + f + r'\s*\(', 'np.'+f+'(', py_equation, flags=re.IGNORECASE)
             
@@ -773,9 +774,17 @@ class CreateColumnDialog(QDialog):
         py_equation = re.sub(r'\blog\s*\(', 'np.log10(', py_equation, flags=re.IGNORECASE)
         py_equation = re.sub(r'\bln\s*\(', 'np.log(', py_equation, flags=re.IGNORECASE)
 
+        # --- NEW: NORM ENGINE ---
+        def norm_func(v):
+            arr = np.asarray(v, dtype=np.float64)
+            m = np.max(arr)
+            return arr / m if m != 0 else arr
+        # ------------------------
+
         try:
             with np.errstate(all='ignore'):
-                eval(py_equation, {"__builtins__": {}}, {"np": np, "data_dict": dummy_dict, "e": np.e, "pi": np.pi, "index": np.ones(1)})
+                # Inject norm into the test environment!
+                eval(py_equation, {"__builtins__": {}}, {"np": np, "data_dict": dummy_dict, "e": np.e, "pi": np.pi, "index": np.ones(1), "norm": norm_func})
             return True
         except Exception:
             return False
@@ -837,7 +846,8 @@ class CreateColumnDialog(QDialog):
             funcs.append(f"<span style='font-style: normal; font-weight: bold; color: #222;'>{func}</span>")
             return f"__FUNC{len(funcs)-1}__"
             
-        html_text = re.sub(r'\b(arcsin|arccos|arctan|arcsinh|arccosh|arctanh|sinh|cosh|tanh|sin|cos|tan|ln|log(?:_?[0-9]+)?)\b', func_repl, html_text, flags=re.IGNORECASE)
+        # --- NEW: ADDED abs AND norm TO REGEX ---
+        html_text = re.sub(r'\b(arcsin|arccos|arctan|arcsinh|arccosh|arctanh|sinh|cosh|tanh|sin|cos|tan|ln|log(?:_?[0-9]+)?|abs|norm)\b', func_repl, html_text, flags=re.IGNORECASE)
 
         def tokenize_to_horizontal(text, f_size):
             parts = re.split(r'(__COL\d+__|__FUNC\d+__|__PAREN\d+__|__EXP\d+__|__CONST\d+__|__INDEX\d+__)', text)
