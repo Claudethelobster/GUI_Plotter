@@ -1511,3 +1511,59 @@ class BaselineSubtractionDialog(QDialog):
         
     def get_result(self):
         return self.current_baseline
+    
+class SpectrogramDialog(QDialog):
+    def __init__(self, main_window, max_pts):
+        super().__init__(main_window)
+        self.main_window = main_window
+        self.setWindowTitle("Spectrogram (STFT) Settings")
+        self.setMinimumWidth(350)
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>Short-Time Fourier Transform</b><br>Maps the frequency spectrum as it changes over time."))
+        layout.addSpacing(10)
+
+        form = QFormLayout()
+        
+        self.window_spin = QSpinBox()
+        self.window_spin.setRange(16, max(16, max_pts))
+        self.window_spin.setSingleStep(128)
+        self.window_spin.setValue(min(256, max(16, max_pts // 10)))
+        self.window_spin.setToolTip("Larger windows = Better Frequency resolution, but worse Time resolution.")
+        form.addRow("Window Size (pts):", self.window_spin)
+        
+        self.overlap_spin = QSpinBox()
+        self.overlap_spin.setRange(0, self.window_spin.value() - 1)
+        self.overlap_spin.setSingleStep(64)
+        self.overlap_spin.setValue(self.window_spin.value() // 2)
+        form.addRow("Overlap (pts):", self.overlap_spin)
+        
+        self.window_type = QComboBox()
+        self.window_type.addItems(["hann", "hamming", "blackman", "boxcar"])
+        form.addRow("Window Type:", self.window_type)
+        
+        layout.addLayout(form)
+        
+        self.log_scale_cb = QCheckBox("Logarithmic Power Scale (dB)")
+        self.log_scale_cb.setChecked(True)
+        layout.addWidget(self.log_scale_cb)
+        
+        layout.addSpacing(10)
+        
+        self.apply_btn = QPushButton("Generate Spectrogram")
+        self.apply_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; padding: 6px; border-radius: 4px; color: #0055ff;")
+        layout.addWidget(self.apply_btn)
+        
+        # Enforce Overlap < Window Size dynamically
+        self.window_spin.valueChanged.connect(self._sync_overlap_limit)
+
+    def _sync_overlap_limit(self, val):
+        self.overlap_spin.setMaximum(val - 1)
+
+    def get_params(self):
+        return {
+            "nperseg": self.window_spin.value(),
+            "noverlap": self.overlap_spin.value(),
+            "window": self.window_type.currentText(),
+            "log": self.log_scale_cb.isChecked()
+        }
