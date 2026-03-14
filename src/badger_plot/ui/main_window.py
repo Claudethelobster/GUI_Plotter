@@ -24,9 +24,13 @@ from core.constants import PHYSICS_CONSTANTS, GREEK_MAP
 from ui.custom_widgets import CustomAxisItem, DraggableLabel
 from ui.dialogs.data_mgmt import (
     FileImportDialog, SweepTableDialog, ManageColumnsDialog, 
-    MetadataDialog, CreateColumnDialog, CopyableErrorDialog
+    MetadataDialog, CreateColumnDialog, CopyableErrorDialog,
+    
 )
-from ui.dialogs.analysis import SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool, LoopAreaDialog, BaselineSubtractionDialog, AreaUnderCurveDialog
+from ui.dialogs.analysis import (SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool,
+                                 LoopAreaDialog, BaselineSubtractionDialog, AreaUnderCurveDialog,
+                                 SpectrogramDialog
+)
 from ui.dialogs.fitting import (
     FitFunctionDialog, CustomFitDialog, MultiFitManagerDialog, FitDataToFunctionWindow
 )
@@ -1431,12 +1435,23 @@ class BadgerLoopQtGraph(QMainWindow):
         
         # Analysis Menu
         analysis_menu = menubar.addMenu("Analysis")
+        
+        # Top-level items
         analysis_menu.addAction("Signal Processing (Smooth / Calculus)").triggered.connect(self.open_signal_processing)
         analysis_menu.addAction("Baseline Subtraction Tool").triggered.connect(self.open_baseline_subtraction)
         analysis_menu.addAction("Phase Space Generator (x vs dx/dt)").triggered.connect(self.open_phase_space_dialog)
-        analysis_menu.addAction("Automated Peak Finder & iFFT Surgeon").triggered.connect(self.open_peak_finder)
-        analysis_menu.addAction("Area Under Curve (Definite Integral)").triggered.connect(self.open_area_under_curve)
-        analysis_menu.addAction("Enclosed Loop Area Calculator").triggered.connect(self.open_loop_area_calculator)
+        
+        analysis_menu.addSeparator()
+        
+        # Sub-menu 1: Fourier Analysis
+        fourier_menu = analysis_menu.addMenu("Fourier Analysis")
+        fourier_menu.addAction("Automated Peak Finder & iFFT Surgeon").triggered.connect(self.open_peak_finder)
+        fourier_menu.addAction("Spectrogram / STFT (Time-Frequency)").triggered.connect(self.open_spectrogram)
+        
+        # Sub-menu 2: Area Calculators
+        area_menu = analysis_menu.addMenu("Area Calculators")
+        area_menu.addAction("Area Under Curve (Definite Integral)").triggered.connect(self.open_area_under_curve)
+        area_menu.addAction("Enclosed Loop Area Calculator").triggered.connect(self.open_loop_area_calculator)
         
         # Layout Menu
         layout_menu = menubar.addMenu("Layout")
@@ -3754,6 +3769,10 @@ class BadgerLoopQtGraph(QMainWindow):
         msg.exec()
 
     def set_plot_mode(self, mode):
+        # --- NEW: Protect the STFT flag ---
+        if not getattr(self, '_ignore_mode_clear', False):
+            self.stft_mode_active = False
+        # ----------------------------------
         self._is_plotting = False
         if mode == "3D" and not OPENGL_AVAILABLE:
             QMessageBox.warning(self, "3D Not Available", "3D plotting requires OpenGL support.\n\nInstall pyqtgraph with OpenGL enabled.\n\nThis can be done with: pip install PyOpenGL PyOpenGL_accelerate")
@@ -3785,12 +3804,17 @@ class BadgerLoopQtGraph(QMainWindow):
             self.ycol_label.setText("Data column" if is_hist else "Y column")
         # --------------------------------------------
         
+        # --- NEW: Hide Z-tools during STFT ---
         show_z = (mode in ["3D", "Heatmap"])
+        if getattr(self, 'stft_mode_active', False): 
+            show_z = False 
+            
         self.zcol.setVisible(show_z)
         self.zcol_label.setVisible(show_z)
         self.zscale_label.setVisible(show_z)
         self.zscale.setVisible(show_z)
         self.zbase.setVisible(show_z and self.zscale.currentText() == "Log")
+        # -------------------------------------
         
         if hasattr(self, 'series_data'):
             self._refresh_series_list_ui()
@@ -4726,6 +4750,7 @@ class BadgerLoopQtGraph(QMainWindow):
         if self.plot_mode in ["3D", "Heatmap"]: self.plot()
 
     def update_current_series(self):
+        self.stft_mode_active = False
         if getattr(self, '_is_updating_ui', False) or not self.dataset: return
         if hasattr(self, 'clear_selection'): self.clear_selection()
         row = self.series_list.currentRow()
@@ -4820,6 +4845,22 @@ class BadgerLoopQtGraph(QMainWindow):
             self.plot_widget.addItem(self.heatmap_image_item)
             self.heatmap_item.setImageItem(self.heatmap_image_item)
             self._pools_initialized = True
+
+        # --- NEW: STFT INTERCEPT ENGINE ---
+        if getattr(self, 'stft_mode_active', False) and self.plot_mode == "Heatmap":
+            if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
+            self._draw_heatmap(getattr(self, 'stft_res_dict', None))
+            
+            # Override labels explicitly to represent the STFT
+            row = max(0, self.series_list.currentRow())
+            if row < len(self.series_data.get("2D", [])):
+                pair = self.series_data["2D"][row]
+                self.plot_widget.setLabel("bottom", pair.get('x_name', 'Time'))
+                self.plot_widget.setLabel("left", "Frequency (Hz)")
+                
+            self._is_plotting = False
+            return
+        # ----------------------------------
 
         import copy
         current_mode_series = self.series_data.get(self.plot_mode, [])
@@ -5783,7 +5824,76 @@ class BadgerLoopQtGraph(QMainWindow):
         self.auc_dlg.accepted.connect(on_accept)
         self.auc_dlg.rejected.connect(on_reject)
         self.auc_dlg.show()
+    
+    def open_spectrogram(self):
+        res = self._get_all_plotted_xy(apply_selection=False)
+        if len(res) < 4 or len(res[0]) < 100:
+            QMessageBox.warning(self, "Not Enough Data", "You need a standard 2D plot with at least 100 points to generate a Spectrogram.")
+            return
+            
+        x_full, y_full, _, pair = res
         
+        # Close old dialog if it's open
+        if hasattr(self, 'spec_dlg') and self.spec_dlg is not None:
+            try: self.spec_dlg.close()
+            except: pass
+            
+        self.spec_dlg = SpectrogramDialog(self, len(x_full))
+        self.spec_dlg.setWindowModality(Qt.NonModal) # Let user click around the main UI
+        
+        def run_stft():
+            import scipy.signal as sig
+            
+            # 1. Get Params
+            p = self.spec_dlg.get_params()
+            
+            # 2. Sort chronologically just in case
+            sort_idx = np.argsort(x_full)
+            x, y = x_full[sort_idx], y_full[sort_idx]
+            
+            # 3. Calculate sampling frequency (fs) from the X-axis time steps
+            dt = np.median(np.diff(x))
+            fs = 1.0 / dt if dt > 0 else 1.0
+            
+            # 4. Generate the Spectrogram!
+            f, t, Sxx = sig.spectrogram(y, fs=fs, window=p["window"], nperseg=p["nperseg"], noverlap=p["noverlap"])
+            
+            # 5. Format the Z-axis Data
+            if p["log"]:
+                with np.errstate(divide='ignore'):
+                    Sxx = 10 * np.log10(Sxx + 1e-12) # Add tiny offset to prevent log(0)
+                z_name = "Power (dB)"
+            else:
+                z_name = "Power"
+                
+            img_data = Sxx.T # Transpose so Time is X, Freq is Y
+            
+            # 6. Package it into our Heatmap system's specific format
+            res_dict = {
+                "img_data": img_data,
+                "x_min": x[0] + t[0], "x_max": x[0] + t[-1],
+                "y_min": f[0], "y_max": f[-1],
+                "z_min": np.min(img_data), "z_max": np.max(img_data),
+                "z_axis_name": z_name
+            }
+            
+            # 7. Hijack the main UI safely
+            self.stft_res_dict = res_dict
+            self.stft_mode_active = True
+            self._ignore_mode_clear = True
+            
+            # This natively calls self.plot() at the end, which triggers our new intercept!
+            self.set_plot_mode("Heatmap") 
+            self._ignore_mode_clear = False
+            
+            
+            # 8. Override the axis labels to represent Time and Freq
+            self.plot_widget.setLabel("bottom", pair.get('x_name', 'Time'))
+            self.plot_widget.setLabel("left", "Frequency (Hz)")
+            
+        self.spec_dlg.apply_btn.clicked.connect(run_stft)
+        self.spec_dlg.show()
+    
     def _activate_auc_line_tool(self, dialog_ref):
         import pyqtgraph as pg
         import numpy as np
