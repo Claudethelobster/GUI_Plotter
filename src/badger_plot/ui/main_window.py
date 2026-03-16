@@ -38,7 +38,49 @@ from ui.dialogs.help import HelpDialog
 
 try:
     import pyqtgraph.opengl as gl
+    from PyQt5.QtGui import QPainter, QTextDocument, QColor, QVector3D
     OPENGL_AVAILABLE = True
+    
+    # --- NEW: CUSTOM 3D HTML RENDERER ---
+    class GLRichTextItem(gl.GLGraphicsItem.GLGraphicsItem):
+        def __init__(self, pos=(0,0,0), text='', font=None, color=(255,255,255,255)):
+            super().__init__()
+            self.pos = pos
+            self.text = text
+            self.font = font
+            self.color = color
+
+        def paint(self):
+            self.setupGLState()
+            view = self.view()
+            painter = QPainter(view)
+            painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+            
+            # Calculate where the 3D point sits on the 2D screen
+            pr = view.projectionMatrix() * view.viewMatrix() * self.transform()
+            p = pr.map(QVector3D(*self.pos))
+            
+            # Hide text if it rotates behind the camera
+            if p.z() > 1.0 or p.z() < -1.0:
+                painter.end()
+                return
+            
+            x = (p.x() + 1.0) * view.width() * 0.5
+            y = (1.0 - p.y()) * view.height() * 0.5
+            
+            # Render HTML using the UI's internal web-engine
+            doc = QTextDocument()
+            if self.font: doc.setDefaultFont(self.font)
+            
+            c = QColor(*self.color) if isinstance(self.color, (tuple, list)) else self.color
+            doc.setHtml(f"<div style='color: {c.name()}; white-space: nowrap;'>{self.text}</div>")
+            
+            # Center the text exactly on the point
+            size = doc.size()
+            painter.translate(x - size.width() / 2, y - size.height() / 2)
+            doc.drawContents(painter)
+            painter.end()
+    # ------------------------------------
 except Exception:
     OPENGL_AVAILABLE = False
 
@@ -3096,7 +3138,7 @@ class BadgerLoopQtGraph(QMainWindow):
         if self.plot_mode == "2D":
             self.graphtype.addItems(["Line", "Scatter"]) # FFT removed! Handled globally now.
         elif self.plot_mode == "3D":
-            self.graphtype.addItems(["Line", "Scatter", "Surface"])
+            self.graphtype.addItems(["Line", "Scatter"])
         elif self.plot_mode == "Heatmap":
             self.graphtype.addItems(["Heatmap Default"])
             
@@ -3111,7 +3153,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
     def _update_graphtype_ui(self):
         is_heatmap = (self.plot_mode == "Heatmap")
-        is_surface = (self.plot_mode == "3D" and self.graphtype.currentText() == "Surface")
+        is_surface = (self.plot_mode == "3D" and hasattr(self, 'gl_surface_cb') and self.gl_surface_cb.isChecked())
         self.heatmap_cmap.setVisible(is_heatmap or is_surface)
         self.heatmap_cmap_label.setVisible(is_heatmap or is_surface)
         
@@ -3238,6 +3280,53 @@ class BadgerLoopQtGraph(QMainWindow):
         self.bins_label = QLabel("Histogram Bins:")
         l4.addRow(self.bins_label, self.bins_edit)
         tabs.addTab(tab4, "Data & Scales")
+        
+        # -- TAB 5: 3D Options --
+        tab5 = QWidget()
+        l5 = QFormLayout(tab5)
+        
+        # --- NEW: SURFACE CHECKBOX ---
+        self.gl_surface_cb = QCheckBox("Draw as 3D Surface (Mesh)")
+        self.gl_surface_cb.stateChanged.connect(self._update_graphtype_ui)
+        self.gl_surface_cb.stateChanged.connect(self.plot)
+        l5.addRow("Plot Style:", self.gl_surface_cb)
+        # -----------------------------
+        
+        from PyQt5.QtWidgets import QDoubleSpinBox
+        self.gl_scale_x = QDoubleSpinBox(); self.gl_scale_x.setRange(0.01, 100); self.gl_scale_x.setValue(1.0); self.gl_scale_x.setSingleStep(0.1)
+        self.gl_scale_y = QDoubleSpinBox(); self.gl_scale_y.setRange(0.01, 100); self.gl_scale_y.setValue(1.0); self.gl_scale_y.setSingleStep(0.1)
+        self.gl_scale_z = QDoubleSpinBox(); self.gl_scale_z.setRange(0.01, 100); self.gl_scale_z.setValue(1.0); self.gl_scale_z.setSingleStep(0.1)
+        
+        scale_lay = QHBoxLayout()
+        scale_lay.addWidget(QLabel("X:")); scale_lay.addWidget(self.gl_scale_x)
+        scale_lay.addWidget(QLabel("Y:")); scale_lay.addWidget(self.gl_scale_y)
+        scale_lay.addWidget(QLabel("Z:")); scale_lay.addWidget(self.gl_scale_z)
+        l5.addRow("Independent Axis Scale:", scale_lay)
+
+        self.gl_lighting_cb = QCheckBox("Enable Directional Lighting (Surface Plots)")
+        self.gl_lighting_cb.setChecked(True)
+        l5.addRow("Shading:", self.gl_lighting_cb)
+
+        self.gl_stem_cb = QCheckBox("Draw Drop Lines to Floor (Scatter/Line Plots)")
+        l5.addRow("Depth Cues:", self.gl_stem_cb)
+
+        # --- NEW: HTML LABEL BUTTONS ---
+        lbl_lay = QHBoxLayout()
+        btn_x_lbl = QPushButton("Edit X Label")
+        btn_y_lbl = QPushButton("Edit Y Label")
+        btn_z_lbl = QPushButton("Edit Z Label")
+        
+        btn_x_lbl.clicked.connect(lambda: self._edit_3d_axis_label("x_3d"))
+        btn_y_lbl.clicked.connect(lambda: self._edit_3d_axis_label("y_3d"))
+        btn_z_lbl.clicked.connect(lambda: self._edit_3d_axis_label("z_3d"))
+        
+        lbl_lay.addWidget(btn_x_lbl)
+        lbl_lay.addWidget(btn_y_lbl)
+        lbl_lay.addWidget(btn_z_lbl)
+        l5.addRow("HTML Axis Labels:", lbl_lay)
+        # -------------------------------
+
+        tabs.addTab(tab5, "3D Options")
 
         # -- Action Buttons --
         btn_lay = QHBoxLayout()
@@ -3251,6 +3340,25 @@ class BadgerLoopQtGraph(QMainWindow):
         btn_lay.addStretch()
         btn_lay.addWidget(apply_btn)
         ld_layout.addLayout(btn_lay)
+        
+    def _edit_3d_axis_label(self, axis_key):
+        # Determine fallback name based on current selected columns
+        if axis_key == "x_3d": default = self.dataset.column_names.get(max(0, self.xcol.currentIndex()), "X")
+        elif axis_key == "y_3d": default = self.dataset.column_names.get(max(0, self.ycol.currentIndex()), "Y")
+        else: default = self.dataset.column_names.get(max(0, self.zcol.currentIndex()), "Z")
+
+        current_data = self.custom_axis_labels.get(axis_key)
+        if isinstance(current_data, dict): current_raw = current_data.get("raw", "")
+        else: current_raw = current_data or "" 
+            
+        dlg = RichTextAxisLabelDialog(axis_key.replace('_3d', ''), current_raw, self)
+        if dlg.exec() == QDialog.Accepted:
+            raw_text, html_text = dlg.get_result()
+            if raw_text: self.custom_axis_labels[axis_key] = {"raw": raw_text, "html": html_text}
+            else: self.custom_axis_labels[axis_key] = None
+            
+            if self.plot_mode == "3D": 
+                self.plot() # Instantly apply it!
         
     def _on_axis_thick_changed(self, val):
         self.axis_thick_label.setText(f"{val} px")
@@ -3266,6 +3374,11 @@ class BadgerLoopQtGraph(QMainWindow):
         self.settings.setValue("legend_fontsize", self.legend_fontsize_edit.text())
         self.settings.setValue("line_thickness", self.line_thickness_edit.text())
         self.settings.setValue("symbol", self.symbol_combo.currentText())
+        self.settings.setValue("gl_scale_x", self.gl_scale_x.value())
+        self.settings.setValue("gl_scale_y", self.gl_scale_y.value())
+        self.settings.setValue("gl_scale_z", self.gl_scale_z.value())
+        self.settings.setValue("gl_lighting", self.gl_lighting_cb.isChecked())
+        self.settings.setValue("gl_stem", self.gl_stem_cb.isChecked())
         QMessageBox.information(self, "Saved", "Plot formatting defaults saved successfully.\nThey will automatically load next time you launch EggPlot.")
 
     def _apply_canvas_settings(self):
@@ -3939,18 +4052,19 @@ class BadgerLoopQtGraph(QMainWindow):
             }
         """)
 
-    def _init_3d_scene(self, data_bounds=None):
-        axis_length = 11.0
+    def _init_3d_scene(self, data_bounds=None, scales=(1.0, 1.0, 1.0)):
+        sx, sy, sz = scales
+        
         gz = gl.GLGridItem()
-        gz.setSize(x=10, y=10, z=0)
-        gz.setSpacing(x=1, y=1, z=0)
+        gz.setSize(x=10*sx, y=10*sy, z=0)
+        gz.setSpacing(x=1*sx, y=1*sy, z=0)
         gz.setColor((150, 150, 150, 255)) 
-        gz.translate(5, 5, -0.1) 
+        gz.translate(5*sx, 5*sy, -0.1) 
         self.gl_widget.addItem(gz)
     
-        x_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, -0.1], [axis_length, 0, -0.1]]), color=(1, 0.2, 0.2, 1), width=4, antialias=True)
-        y_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, -0.1], [0, axis_length, -0.1]]), color=(0.2, 1, 0.2, 1), width=4, antialias=True)
-        z_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, -0.1], [0, 0, axis_length]]), color=(0.2, 0.5, 1, 1), width=4, antialias=True)
+        x_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, -0.1], [11*sx, 0, -0.1]]), color=(1, 0.2, 0.2, 1), width=4, antialias=True)
+        y_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, -0.1], [0, 11*sy, -0.1]]), color=(0.2, 1, 0.2, 1), width=4, antialias=True)
+        z_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, -0.1], [0, 0, 11*sz]]), color=(0.2, 0.5, 1, 1), width=4, antialias=True)
     
         self.gl_widget.addItem(x_axis)
         self.gl_widget.addItem(y_axis)
@@ -3964,9 +4078,20 @@ class BadgerLoopQtGraph(QMainWindow):
         spans = maxs - mins
         spans[spans == 0] = 1.0 
 
-        x_name = self.xcol.currentText().split(": ")[-1] if ":" in self.xcol.currentText() else "X"
-        y_name = self.ycol.currentText().split(": ")[-1] if ":" in self.ycol.currentText() else "Y"
-        z_name = self.zcol.currentText().split(": ")[-1] if ":" in self.zcol.currentText() else "Z"
+        x_name_def = self.xcol.currentText().split(": ")[-1] if ":" in self.xcol.currentText() else "X"
+        y_name_def = self.ycol.currentText().split(": ")[-1] if ":" in self.ycol.currentText() else "Y"
+        z_name_def = self.zcol.currentText().split(": ")[-1] if ":" in self.zcol.currentText() else "Z"
+
+        # --- NEW: EXTRACT HTML LABELS ---
+        def get_lbl(key, default):
+            saved = self.custom_axis_labels.get(key)
+            if isinstance(saved, dict): return saved.get("html", default)
+            return saved or default
+
+        x_name = get_lbl("x_3d", x_name_def)
+        y_name = get_lbl("y_3d", y_name_def)
+        z_name = get_lbl("z_3d", z_name_def)
+        # --------------------------------
 
         xlog, ylog, zlog = self.xscale.currentText() == "Log", self.yscale.currentText() == "Log", self.zscale.currentText() == "Log"
         xbase = self._parse_log_base(self.xbase.text())
@@ -3991,32 +4116,39 @@ class BadgerLoopQtGraph(QMainWindow):
                 if abs(v) < 1e-3 or abs(v) > 1e4: return f"{v:.2e}"
                 return f"{v:.3g}"
 
-        num_ticks = 5
-        tick_positions = np.linspace(0, 10, num_ticks)
-        font = pg.QtGui.QFont("Arial", 10)
-        label_font = pg.QtGui.QFont("Arial", 12, pg.QtGui.QFont.Bold)
+        font_family = self.font_family_combo.currentFont().family()
+        try: tick_size = int(self.tick_fontsize_edit.text())
+        except ValueError: tick_size = 10
+        try: label_size = int(self.label_fontsize_edit.text())
+        except ValueError: label_size = 12
+
+        font = pg.QtGui.QFont(font_family, tick_size)
+        label_font = pg.QtGui.QFont(font_family, label_size, pg.QtGui.QFont.Bold)
         text_color = (200, 200, 200, 255) 
 
         def add_tick_line(p1, p2):
             self.gl_widget.addItem(gl.GLLinePlotItem(pos=np.array([p1, p2]), color=(0.7, 0.7, 0.7, 1), width=2))
 
+        tick_positions = np.linspace(0, 10, 5)
+
+        # --- NEW: DRAW HTML WITH GLRichTextItem ---
         for pos in tick_positions:
             val = mins[0] + (pos / 10.0) * spans[0]
-            add_tick_line([pos, 0, -0.1], [pos, -0.3, -0.1])
-            self.gl_widget.addItem(GLTextItem(pos=[pos, -0.5, -0.1], text=format_val_3d(val, xlog, xbase), font=font, color=text_color))
-        self.gl_widget.addItem(GLTextItem(pos=[5, -1.8, -0.1], text=x_name, font=label_font, color=(255, 255, 255, 255)))
+            add_tick_line([pos*sx, 0, -0.1], [pos*sx, -0.3, -0.1])
+            self.gl_widget.addItem(GLRichTextItem(pos=[pos*sx, -0.5, -0.1], text=format_val_3d(val, xlog, xbase), font=font, color=text_color))
+        self.gl_widget.addItem(GLRichTextItem(pos=[5*sx, -1.8, -0.1], text=x_name, font=label_font, color=(255, 255, 255, 255)))
 
         for pos in tick_positions:
             val = mins[1] + (pos / 10.0) * spans[1]
-            add_tick_line([0, pos, -0.1], [-0.3, pos, -0.1])
-            self.gl_widget.addItem(GLTextItem(pos=[-0.5, pos, -0.1], text=format_val_3d(val, ylog, ybase), font=font, color=text_color))
-        self.gl_widget.addItem(GLTextItem(pos=[-2.2, 5, -0.1], text=y_name, font=label_font, color=(255, 255, 255, 255)))
+            add_tick_line([0, pos*sy, -0.1], [-0.3, pos*sy, -0.1])
+            self.gl_widget.addItem(GLRichTextItem(pos=[-0.5, pos*sy, -0.1], text=format_val_3d(val, ylog, ybase), font=font, color=text_color))
+        self.gl_widget.addItem(GLRichTextItem(pos=[-2.2, 5*sy, -0.1], text=y_name, font=label_font, color=(255, 255, 255, 255)))
 
         for pos in tick_positions[1:]: 
             val = mins[2] + (pos / 10.0) * spans[2]
-            add_tick_line([0, 0, pos], [-0.3, 0, pos])
-            self.gl_widget.addItem(GLTextItem(pos=[-0.5, 0, pos], text=format_val_3d(val, zlog, zbase), font=font, color=text_color))
-        self.gl_widget.addItem(GLTextItem(pos=[-1.5, 0, 5], text=z_name, font=label_font, color=(255, 255, 255, 255)))
+            add_tick_line([0, 0, pos*sz], [-0.3, 0, pos*sz])
+            self.gl_widget.addItem(GLRichTextItem(pos=[-0.5, 0, pos*sz], text=format_val_3d(val, zlog, zbase), font=font, color=text_color))
+        self.gl_widget.addItem(GLRichTextItem(pos=[-1.5, 0, 5*sz], text=z_name, font=label_font, color=(255, 255, 255, 255)))
 
     def toggle_legend(self):
         self.legend_visible = not getattr(self, 'legend_visible', True)
@@ -4189,6 +4321,13 @@ class BadgerLoopQtGraph(QMainWindow):
                 
                 self.update_file_mode_ui()
                 self.point_size_edit.setText(self.settings.value("point_size", "5"))
+                try:
+                    self.gl_scale_x.setValue(float(self.settings.value("gl_scale_x", 1.0)))
+                    self.gl_scale_y.setValue(float(self.settings.value("gl_scale_y", 1.0)))
+                    self.gl_scale_z.setValue(float(self.settings.value("gl_scale_z", 1.0)))
+                    self.gl_lighting_cb.setChecked(self.settings.value("gl_lighting", True, bool))
+                    self.gl_stem_cb.setChecked(self.settings.value("gl_stem", False, bool))
+                except Exception: pass
         
                 saved_labels_str = self.settings.value("custom_axis_labels", "")
                 if saved_labels_str:
@@ -4878,6 +5017,11 @@ class BadgerLoopQtGraph(QMainWindow):
         yidx = series_to_plot[0]['y']
         zidx = series_to_plot[0].get('z', 0)
         
+        # --- SECRET INJECTION ---
+        actual_gtype = self.graphtype.currentText()
+        if self.plot_mode == "3D" and getattr(self, 'gl_surface_cb', None) and self.gl_surface_cb.isChecked():
+            actual_gtype = "Surface"
+            
         params = {
             "plot_mode": self.plot_mode,
             "active_series": series_to_plot,
@@ -4895,7 +5039,7 @@ class BadgerLoopQtGraph(QMainWindow):
             "nsigma": float(self.errorbar_sigma_edit.text()) if self.errorbar_sigma_edit.text().replace('.','',1).isdigit() else 1.0,
             "csv_uncerts_enabled": getattr(self, 'csv_uncerts_enabled', False),
             "file_type": self.file_type, 
-            "graphtype": self.graphtype.currentText(),
+            "graphtype": actual_gtype, # <--- INJECTED HERE
             "fft_mode_active": getattr(self, 'fft_mode_active', False)
         }
         
@@ -5464,7 +5608,13 @@ class BadgerLoopQtGraph(QMainWindow):
             mins, maxs = bounds
             spans = maxs - mins
             spans[spans == 0] = 1.0 
-            scale_factors = 10.0 / spans
+            
+            # --- NEW: APPLY INDEPENDENT AXIS SCALES ---
+            sx = self.gl_scale_x.value()
+            sy = self.gl_scale_y.value()
+            sz = self.gl_scale_z.value()
+            scale_factors = (10.0 / spans) * np.array([sx, sy, sz])
+            # ------------------------------------------
             
             import matplotlib
             
@@ -5522,10 +5672,22 @@ class BadgerLoopQtGraph(QMainWindow):
                         item = gl.GLLinePlotItem(pos=cross_pts, color=c_tuple, width=3, antialias=True, mode='lines')
                         
                     self.gl_widget.addItem(item)
+                    
+                    # --- NEW: STEM PLOTTING (DROP LINES) ---
+                    if self.gl_stem_cb.isChecked():
+                        stem_pts = np.empty((len(norm_pts) * 2, 3), dtype=np.float32)
+                        stem_pts[0::2] = norm_pts
+                        floor_pts = norm_pts.copy()
+                        floor_pts[:, 2] = 0.0 # Drop straight down to the physical floor
+                        stem_pts[1::2] = floor_pts
+                        
+                        stem_item = gl.GLLinePlotItem(pos=stem_pts, color=(1, 1, 1, 0.4), width=1, antialias=True, mode='lines')
+                        self.gl_widget.addItem(stem_item)
+                    # ---------------------------------------
         
-            self.gl_widget.opts['center'] = pg.Vector(5, 5, 5)
-            self.gl_widget.setCameraPosition(distance=25, elevation=25, azimuth=45)
-            self._init_3d_scene(bounds)
+            self.gl_widget.opts['center'] = pg.Vector(5*sx, 5*sy, 5*sz) # Center camera on scaled data
+            self.gl_widget.setCameraPosition(distance=25*max(sx, sy, sz), elevation=25, azimuth=45)
+            self._init_3d_scene(bounds, (sx, sy, sz)) # Pass scales to the scene builder
             
         except Exception as e:
             import traceback
