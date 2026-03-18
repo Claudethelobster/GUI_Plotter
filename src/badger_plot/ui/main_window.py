@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 from core.data_loader import DataLoaderThread, CSVDataset, Dataset, BADGERLOOP_AVAILABLE
 from core.plot_worker import PlotWorkerThread
 from core.constants import PHYSICS_CONSTANTS, GREEK_MAP
+from core.theme import theme
 
 # UI Component imports
 from ui.custom_widgets import CustomAxisItem, DraggableLabel, CustomLegendItem, TraceSettingsDialog
@@ -60,8 +61,21 @@ try:
             painter = QPainter(view)
             painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
             
-            # Calculate where the 3D point sits on the 2D screen
-            pr = view.projectionMatrix() * view.viewMatrix() * self.transform()
+            # --- CRITICAL FIX: PyQtGraph 0.13+ Compatibility ---
+            try:
+                # Extract the raw integers from the QRect object into a tuple
+                v_rect = view.rect()
+                rect_tuple = (v_rect.x(), v_rect.y(), v_rect.width(), v_rect.height())
+                
+                # Pass the tuple to the newer pyqtgraph engine
+                proj = view.projectionMatrix(region=rect_tuple, viewport=rect_tuple)
+            except TypeError:
+                # Fallback for older versions
+                proj = view.projectionMatrix()
+                
+            pr = proj * view.viewMatrix() * self.transform()
+            # ---------------------------------------------------
+            
             p = pr.map(QVector3D(*self.pos))
             
             # Hide text if it rotates behind the camera
@@ -538,9 +552,9 @@ class BadgerLoopQtGraph(QMainWindow):
         
         # Update styling
         if self.csv_uncerts_enabled:
-            self.toggle_uncert_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+            self.toggle_uncert_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; border-radius: 4px; padding: 6px; color: {theme.primary_text};")
         else:
-            self.toggle_uncert_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+            self.toggle_uncert_btn.setStyleSheet(f"background-color: {theme.bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px; color: {theme.fg};")
             
         self._update_uncert_visibility()
         self.update_file_mode_ui()
@@ -699,8 +713,8 @@ class BadgerLoopQtGraph(QMainWindow):
             self.interaction_mode = "box" if "Box" in text else "lasso"
             self.plot_widget.getViewBox().setMouseEnabled(x=False, y=False)
 
-        active_style = "background-color: #d0e8ff; border: 2px solid #0078d7; font-weight: bold; border-radius: 4px; padding: 6px; color: #003366;"
-        inactive_style = "background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;"
+        active_style = f"background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; font-weight: bold; border-radius: 4px; padding: 6px; color: {theme.primary_text};"
+        inactive_style = f"background-color: {theme.bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px; color: {theme.fg};"
 
         for b in [self.btn_pan, self.btn_box, self.btn_lasso]:
             if b.isChecked(): b.setStyleSheet(active_style)
@@ -3993,7 +4007,7 @@ class BadgerLoopQtGraph(QMainWindow):
         self.toggle_legend_btn = QPushButton("Toggle Legend")
         self.toggle_legend_btn.setCheckable(True)
         self.toggle_legend_btn.setChecked(True) # Legend is visible by default
-        self.toggle_legend_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        self.toggle_legend_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; border-radius: 4px; padding: 6px; color: {theme.primary_text};")
         self.toggle_legend_btn.clicked.connect(self.toggle_legend)
         controls.addWidget(self.toggle_legend_btn)
         
@@ -4001,7 +4015,7 @@ class BadgerLoopQtGraph(QMainWindow):
         self.toggle_stats_btn = QPushButton("Toggle Histogram Stats")
         self.toggle_stats_btn.setCheckable(True)
         self.toggle_stats_btn.setChecked(True)
-        self.toggle_stats_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        self.toggle_stats_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; border-radius: 4px; padding: 6px; color: {theme.primary_text};")
         self.toggle_stats_btn.setVisible(False) 
         self.toggle_stats_btn.clicked.connect(self._toggle_hist_stats)
         controls.addWidget(self.toggle_stats_btn)
@@ -4011,7 +4025,7 @@ class BadgerLoopQtGraph(QMainWindow):
         self.toggle_loop_btn = QPushButton("Toggle Loop Areas")
         self.toggle_loop_btn.setCheckable(True)
         self.toggle_loop_btn.setChecked(True)
-        self.toggle_loop_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        self.toggle_loop_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; border-radius: 4px; padding: 6px; color: {theme.primary_text};")
         self.toggle_loop_btn.setVisible(False) 
         self.toggle_loop_btn.clicked.connect(self._toggle_loop_areas)
         controls.addWidget(self.toggle_loop_btn)
@@ -4119,7 +4133,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
         btn_h = QHBoxLayout()
         self.add_series_btn = QPushButton("Add Pair")
-        self.add_series_btn.setStyleSheet("font-weight: bold; color: #0055ff;")
+        self.add_series_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text};")
         self.add_series_btn.clicked.connect(self.add_series_to_list)
         self.remove_series_btn = QPushButton("Remove")
         self.remove_series_btn.clicked.connect(self.remove_series_from_list)
@@ -4243,56 +4257,50 @@ class BadgerLoopQtGraph(QMainWindow):
         self.crosshairs_enabled = False
         
         self.crosshair_label = QLabel(self.plot_wrapper)
-        self.crosshair_label.setStyleSheet("""
-            background-color: rgba(255, 255, 255, 220); 
-            border: 1px solid #333; border-radius: 4px; 
+        self.crosshair_label.setStyleSheet(f"""
+            background-color: {theme.panel_bg}; 
+            border: 1px solid {theme.border}; border-radius: 4px; 
             padding: 5px; font-weight: bold; font-family: Consolas;
-            font-size: 14px; color: black;
+            font-size: 14px; color: {theme.fg};
         """)
         self.crosshair_label.hide()
-        
+
         self.stats_label = DraggableLabel(self.plot_wrapper)
-        self.stats_label.setStyleSheet("""
-            background-color: rgba(240, 248, 255, 230); 
-            border: 2px solid #0055ff; 
-            border-radius: 6px; 
-            padding: 8px; 
-            font-family: Consolas, monospace;
-            font-size: 13px; 
-            color: #111;
+        self.stats_label.setStyleSheet(f"""
+            background-color: {theme.primary_bg}; 
+            border: 2px solid {theme.primary_border}; 
+            border-radius: 6px; padding: 8px; 
+            font-family: Consolas, monospace; font-size: 13px; 
+            color: {theme.primary_text};
         """)
         self.stats_label.hide()
-        
+
         # --- NEW: LOOP STATS HUD ---
         self.loop_stats_label = DraggableLabel(self.plot_wrapper)
-        self.loop_stats_label.setStyleSheet("""
-            background-color: rgba(240, 255, 240, 230); 
-            border: 2px solid #2ca02c; 
-            border-radius: 6px; 
-            padding: 8px; 
-            font-family: Consolas, monospace;
-            font-size: 13px; 
-            color: #111;
+        self.loop_stats_label.setStyleSheet(f"""
+            background-color: {theme.success_bg}; 
+            border: 2px solid {theme.success_border}; 
+            border-radius: 6px; padding: 8px; 
+            font-family: Consolas, monospace; font-size: 13px; 
+            color: {theme.success_text};
         """)
         self.loop_stats_label.hide()
         # ---------------------------
         # --- NEW: AREA UNDER CURVE HUD ---
         self.auc_stats_label = DraggableLabel(self.plot_wrapper)
-        self.auc_stats_label.setStyleSheet("""
-            background-color: rgba(255, 245, 230, 230); 
-            border: 2px solid #ffaa00; 
-            border-radius: 6px; 
-            padding: 8px; 
-            font-family: Consolas, monospace;
-            font-size: 13px; 
-            color: #111;
+        self.auc_stats_label.setStyleSheet(f"""
+            background-color: {theme.warning_bg}; 
+            border: 2px solid {theme.warning_border}; 
+            border-radius: 6px; padding: 8px; 
+            font-family: Consolas, monospace; font-size: 13px; 
+            color: {theme.warning_text};
         """)
         self.auc_stats_label.hide()
         
         self.toggle_auc_btn = QPushButton("Toggle Peak Areas")
         self.toggle_auc_btn.setCheckable(True)
         self.toggle_auc_btn.setChecked(True)
-        self.toggle_auc_btn.setStyleSheet("font-weight: bold; background-color: #fff0d0; border: 2px solid #ffaa00; border-radius: 4px; padding: 6px; color: #ff8800;")
+        self.toggle_auc_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.warning_bg}; border: 2px solid {theme.warning_border}; border-radius: 4px; padding: 6px; color: {theme.warning_text};")
         self.toggle_auc_btn.setVisible(False) 
         self.toggle_auc_btn.clicked.connect(self._toggle_auc_areas)
         controls.addWidget(self.toggle_auc_btn)
@@ -4325,10 +4333,10 @@ class BadgerLoopQtGraph(QMainWindow):
     def _update_snap_btn_ui(self):
         if self.snap_toggle_btn.isChecked():
             self.snap_toggle_btn.setText("✔ Snap Crosshair to Point")
-            self.snap_toggle_btn.setStyleSheet("font-weight: bold; color: #2ca02c; border: 2px solid #2ca02c; padding: 6px; background-color: #f5f5f5;")
+            self.snap_toggle_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; border: 2px solid {theme.success_border}; padding: 6px; background-color: {theme.bg};")
         else:
             self.snap_toggle_btn.setText("✖ Free Crosshair")
-            self.snap_toggle_btn.setStyleSheet("font-weight: bold; color: #d90000; border: 2px solid #d90000; padding: 6px; background-color: #f5f5f5;")
+            self.snap_toggle_btn.setStyleSheet(f"font-weight: bold; color: {theme.danger_text}; border: 2px solid {theme.danger_border}; padding: 6px; background-color: {theme.bg};")
 
     def mouse_moved(self, evt):
         if not getattr(self, 'crosshairs_enabled', False) or self.plot_mode != "2D":
@@ -4609,9 +4617,9 @@ class BadgerLoopQtGraph(QMainWindow):
             
         # Update styling
         if self.average_enabled:
-            self.toggle_avg_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+            self.toggle_avg_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; border-radius: 4px; padding: 6px; color: {theme.primary_text};")
         else:
-            self.toggle_avg_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+            self.toggle_avg_btn.setStyleSheet(f"background-color: {theme.bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px; color: {theme.fg};")
         
         self.update_file_mode_ui()
         self.plot()
@@ -4619,9 +4627,9 @@ class BadgerLoopQtGraph(QMainWindow):
     def toggle_errorbars(self):
         self.errorbars_enabled = self.errorbar_btn.isChecked()
         if self.errorbars_enabled:
-            self.errorbar_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+            self.errorbar_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; border-radius: 4px; padding: 6px; color: {theme.primary_text};")
         else:
-            self.errorbar_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+            self.errorbar_btn.setStyleSheet(f"background-color: {theme.bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px; color: {theme.fg};")
         self.plot()
 
     def _fix_graphics_view(self):
@@ -4641,9 +4649,23 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def _apply_styles(self):
         app = QApplication.instance()
+        is_dark = self.settings.value("dark_mode", False, bool)
+        theme.update(is_dark)
         
-        # --- NEW: DARK MODE ENGINE ---
-        if self.settings.value("dark_mode", False, bool):
+        # --- NEW: WINDOWS 10/11 TITLE BAR HACK ---
+        try:
+            import ctypes
+            # 20 is DWMWA_USE_IMMERSIVE_DARK_MODE for Windows 11 and newer 10
+            # 19 is for older builds of Windows 10
+            rendering_policy = ctypes.c_int(1 if is_dark else 0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(int(self.winId()), 20, ctypes.byref(rendering_policy), ctypes.sizeof(rendering_policy))
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(int(self.winId()), 19, ctypes.byref(rendering_policy), ctypes.sizeof(rendering_policy))
+        except Exception:
+            pass
+        # -----------------------------------------
+        
+        # --- DARK MODE ENGINE ---
+        if is_dark:
             if app:
                 app.setStyle("Fusion")
                 dark_palette = QPalette()
@@ -4667,13 +4689,20 @@ class BadgerLoopQtGraph(QMainWindow):
                 QPushButton:hover { background-color: #555; }
                 QPushButton:pressed { background-color: #333; }
                 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background-color: #222; color: white; border: 1px solid #555; padding: 4px; }
+                
+                /* DARK MODE TAB STYLES */
+                QTabWidget::pane { border: 1px solid #555; background-color: #353535; }
+                QTabBar::tab { background-color: #2a2a2a; color: #888; padding: 8px 16px; border: 1px solid #555; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; }
+                QTabBar::tab:selected { background-color: #444; color: white; border: 1px solid #0055ff; border-bottom: none; font-weight: bold; }
+                QTabBar::tab:hover:!selected { background-color: #3a3a3a; color: white; }
             """)
             return
         # -----------------------------
-        # Default Light Mode
+
+        # --- LIGHT MODE ENGINE ---
         if app: 
             app.setStyle("Fusion")
-            app.setPalette(app.style().standardPalette()) # <--- CRITICAL FIX: Restores default OS colors
+            app.setPalette(app.style().standardPalette()) # CRITICAL FIX: Restores default OS colors!
             
         self.setStyleSheet("""
             QPushButton { background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black; }
@@ -4791,9 +4820,9 @@ class BadgerLoopQtGraph(QMainWindow):
         if hasattr(self, 'toggle_legend_btn'):
             self.toggle_legend_btn.setChecked(self.legend_visible)
             if self.legend_visible:
-                self.toggle_legend_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+                self.toggle_legend_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; border-radius: 4px; padding: 6px; color: {theme.primary_text};")
             else:
-                self.toggle_legend_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+                self.toggle_legend_btn.setStyleSheet(f"background-color: {theme.bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px; color: {theme.fg};")
                 
     def _toggle_hist_stats(self):
         if self.toggle_stats_btn.isChecked():
