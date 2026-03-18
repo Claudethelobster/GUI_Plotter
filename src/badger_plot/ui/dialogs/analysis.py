@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 from badger_plot.core.constants import PHYSICS_CONSTANTS, GREEK_MAP
 from core.data_loader import DataLoaderThread
+from core.theme import theme
 
 class AreaUnderCurveDialog(QDialog):
     def __init__(self, main_window):
@@ -40,7 +41,7 @@ class AreaUnderCurveDialog(QDialog):
         layout.addLayout(sel_layout)
 
         self.lbl_points = QLabel("Selected points: 0")
-        self.lbl_points.setStyleSheet("color: #d90000; font-weight: bold;")
+        self.lbl_points.setStyleSheet(f"color: {theme.danger_text}; font-weight: bold;")
         layout.addWidget(self.lbl_points)
 
         # --- STEP 2: BASELINE OPTIONS ---
@@ -66,7 +67,7 @@ class AreaUnderCurveDialog(QDialog):
         # --- STEP 3: ACTION BUTTONS ---
         btn_box_layout = QHBoxLayout()
         self.ok_btn = QPushButton("Calculate Area")
-        self.ok_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        self.ok_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         self.ok_btn.clicked.connect(self.accept)
         
         cancel_btn = QPushButton("Cancel")
@@ -82,7 +83,8 @@ class AreaUnderCurveDialog(QDialog):
     def update_points_label(self):
         count = len(getattr(self.main_window, 'selected_indices', set()))
         self.lbl_points.setText(f"Selected points: {count}")
-        self.lbl_points.setStyleSheet("color: #2ca02c; font-weight: bold;" if count > 2 else "color: #d90000; font-weight: bold;")
+        color = theme.success_text if count > 2 else theme.danger_text
+        self.lbl_points.setStyleSheet(f"color: {color}; font-weight: bold;")
         self.ok_btn.setEnabled(count > 2)
 
     def _activate_box(self):
@@ -135,7 +137,7 @@ class LoopAreaDialog(QDialog):
         
         btn_layout = QHBoxLayout()
         self.btn_auto = QPushButton("🔍 Auto-Detect Loops")
-        self.btn_auto.setStyleSheet("font-weight: bold; background-color: #d0e8ff;")
+        self.btn_auto.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; color: {theme.primary_text};")
         self.btn_auto.clicked.connect(self._auto_detect)
         
         self.btn_manual = QPushButton("🎯 Capture Lasso/Box Selection")
@@ -164,7 +166,7 @@ class LoopAreaDialog(QDialog):
         
         buttons = QHBoxLayout()
         ok_btn = QPushButton("Apply & View Results")
-        ok_btn.setStyleSheet("font-weight: bold; color: #0055ff;")
+        ok_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text};")
         cancel_btn = QPushButton("Cancel")
         
         ok_btn.clicked.connect(self.accept)
@@ -404,7 +406,7 @@ class SignalProcessingDialog(QDialog):
         
         btn_box = QHBoxLayout()
         self.save_btn = QPushButton("Save as New Column")
-        self.save_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        self.save_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         cancel_btn = QPushButton("Cancel")
         btn_box.addStretch()
         btn_box.addWidget(cancel_btn)
@@ -560,7 +562,7 @@ class PhaseSpaceDialog(QDialog):
 
         btn_box = QHBoxLayout()
         self.calc_btn = QPushButton("Generate & Plot")
-        self.calc_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        self.calc_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         cancel_btn = QPushButton("Cancel")
         btn_box.addStretch()
         btn_box.addWidget(cancel_btn)
@@ -640,7 +642,7 @@ class PeakFinderTool(QDialog):
         
         btn_layout = QHBoxLayout()
         self.find_btn = QPushButton("🔍 Find Peaks")
-        self.find_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        self.find_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         self.find_btn.clicked.connect(self.run_peak_finder)
         
         self.clear_btn = QPushButton("✖ Clear Markers")
@@ -664,7 +666,7 @@ class PeakFinderTool(QDialog):
         self.peak_data_memory = []
         
         self.fft_group = QGroupBox("✂ Interactive iFFT Surgeon")
-        self.fft_group.setStyleSheet("QGroupBox { font-weight: bold; border: 2px solid #d90000; border-radius: 6px; margin-top: 10px; padding-top: 15px; } QGroupBox::title { color: #d90000; left: 10px; }")
+        self.fft_group.setStyleSheet(f"QGroupBox {{ font-weight: bold; border: 2px solid {theme.danger_text}; border-radius: 6px; margin-top: 10px; padding-top: 15px; }} QGroupBox::title {{ color: {theme.danger_text}; left: 10px; }}")
         fft_layout = QVBoxLayout()
         noise_layout = QHBoxLayout()
         
@@ -704,7 +706,7 @@ class PeakFinderTool(QDialog):
         fft_layout.addWidget(QLabel("<i>Target noise by highlighting table rows OR drawing a yellow box over the spike.</i>"))
         
         self.selection_label = QLabel("<b>Targeted for removal:</b> None")
-        self.selection_label.setStyleSheet("color: #d90000; font-size: 13px; padding: 4px; border: 1px dashed #d90000; background-color: #fff0f0;")
+        self.selection_label.setStyleSheet(f"color: {theme.danger_text}; font-size: 13px; padding: 4px; border: 1px dashed {theme.danger_border}; background-color: {theme.danger_bg};")
         self.selection_label.setWordWrap(True)
         fft_layout.addWidget(self.selection_label)
         
@@ -718,7 +720,7 @@ class PeakFinderTool(QDialog):
         row_h.addWidget(self.ifft_name_edit)
         
         self.ifft_btn = QPushButton("✂ Remove Targeted Noise")
-        self.ifft_btn.setStyleSheet("font-weight: bold; background-color: #ffe6e6; color: #d90000; padding: 6px;")
+        self.ifft_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.danger_bg}; color: {theme.danger_text}; padding: 6px;")
         self.ifft_btn.clicked.connect(self.run_ifft_filter)
         row_h.addWidget(self.ifft_btn)
         
@@ -757,8 +759,8 @@ class PeakFinderTool(QDialog):
             self.selection_label.setText("<b>Targeted for removal:</b> None")
 
     def _get_toggle_style(self, is_on):
-        if is_on: return "background-color: #0055ff; color: white; border-radius: 4px; padding: 8px; border: none;"
-        return "background-color: #f5f5f5; color: black; border: 1px solid #aaa; border-radius: 4px; padding: 8px;"
+        if is_on: return f"background-color: {theme.primary_text}; color: {theme.panel_bg}; border-radius: 4px; padding: 8px; border: none;"
+        return f"background-color: {theme.bg}; color: {theme.fg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 8px;"
         
     def toggle_fft_mode(self):
         is_on = self.fft_toggle_btn.isChecked()
@@ -771,8 +773,8 @@ class PeakFinderTool(QDialog):
         self.fft_group.setVisible(self.fft_toggle_btn.isChecked())
         
     def _update_interaction_styles(self):
-        active_style = "background-color: #d0e8ff; border: 2px solid #0078d7; font-weight: bold; border-radius: 4px; padding: 4px;"
-        inactive_style = "background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 4px;"
+        active_style = f"background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; font-weight: bold; border-radius: 4px; padding: 4px; color: {theme.primary_text};"
+        inactive_style = f"background-color: {theme.bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 4px; color: {theme.fg};"
         for b in [self.btn_pan, self.btn_box, self.btn_lasso]:
             b.setStyleSheet(active_style if b.isChecked() else inactive_style)
 
@@ -1185,7 +1187,7 @@ class BaselineSubtractionDialog(QDialog):
         # --- BOTTOM BUTTONS ---
         btn_box = QHBoxLayout()
         ok_btn = QPushButton("Subtract & Create Column")
-        ok_btn.setStyleSheet("font-weight: bold; color: #2ca02c; padding: 6px;")
+        ok_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; padding: 6px;")
         ok_btn.clicked.connect(self.accept)
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
@@ -1498,10 +1500,10 @@ class BaselineSubtractionDialog(QDialog):
     def _toggle_flattened_preview(self):
         self._update_preview()
         if self.preview_btn.isChecked():
-            self.preview_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff;")
+            self.preview_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; color: {theme.primary_text};")
             self.preview_btn.setText("View Original Data + Baseline")
         else:
-            self.preview_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a;")
+            self.preview_btn.setStyleSheet(f"background-color: {theme.bg}; border: 1px solid {theme.border}; color: {theme.fg};")
             self.preview_btn.setText("Toggle Flattened Preview")
 
     def closeEvent(self, event):
@@ -1551,7 +1553,7 @@ class SpectrogramDialog(QDialog):
         layout.addSpacing(10)
         
         self.apply_btn = QPushButton("Generate Spectrogram")
-        self.apply_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; padding: 6px; border-radius: 4px; color: #0055ff;")
+        self.apply_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; padding: 6px; border-radius: 4px; color: {theme.primary_text};")
         layout.addWidget(self.apply_btn)
         
         # Enforce Overlap < Window Size dynamically
@@ -1609,7 +1611,7 @@ class DataSlicerDialog(QDialog):
 
         btn_box = QHBoxLayout()
         ok = QPushButton("Slice Data")
-        ok.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        ok.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         cancel = QPushButton("Cancel")
         btn_box.addStretch(); btn_box.addWidget(cancel); btn_box.addWidget(ok)
         layout.addLayout(btn_box)
