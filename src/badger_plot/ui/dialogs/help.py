@@ -1,28 +1,36 @@
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton, QHBoxLayout
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton
+
+from core.theme import theme
 
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("EggPlot - Help & Instructions")
         self.resize(850, 800)
+        
+        # Apply the base dialog theme
+        self.setStyleSheet(f"background-color: {theme.bg}; color: {theme.fg};")
 
         layout = QVBoxLayout(self)
 
         self.browser = QTextBrowser()
         self.browser.setOpenExternalLinks(True)
+        self.browser.setStyleSheet(f"background-color: {theme.panel_bg}; border: 1px solid {theme.border};")
         
-        html_content = """
+        # We use an f-string to inject the dynamic theme colors into the HTML CSS
+        # Notice that standard CSS curly braces are doubled ({{ and }})
+        html_content = f"""
         <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 14px; color: #222; line-height: 1.5; }
-            h1 { color: #0055ff; margin-bottom: 5px; }
-            h2 { color: #d90000; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 20px; font-size: 18px;}
-            h3 { color: #333; margin-bottom: 2px; }
-            ul { margin-top: 5px; }
-            li { margin-bottom: 6px; }
-            code { background-color: #f4f4f4; padding: 2px 4px; border-radius: 3px; font-family: Consolas, monospace; color: #0055ff; font-weight: bold; }
-            .about { background-color: #fff9e6; border-left: 4px solid #ffcc00; padding: 10px; margin-bottom: 20px; font-style: italic; }
-            .safety { background-color: #e6f7ff; border-left: 4px solid #0055ff; padding: 10px; margin-top: 20px; }
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 14px; color: {theme.fg}; line-height: 1.5; }}
+            h1 {{ color: {theme.primary_text}; margin-bottom: 5px; }}
+            h2 {{ color: {theme.danger_text}; border-bottom: 1px solid {theme.border}; padding-bottom: 3px; margin-top: 20px; font-size: 18px;}}
+            h3 {{ color: {theme.fg}; margin-bottom: 2px; }}
+            ul {{ margin-top: 5px; }}
+            li {{ margin-bottom: 6px; }}
+            code {{ background-color: {theme.bg}; padding: 2px 4px; border-radius: 3px; font-family: Consolas, monospace; color: {theme.primary_text}; font-weight: bold; border: 1px solid {theme.border}; }}
+            .about {{ background-color: {theme.warning_bg}; border-left: 4px solid {theme.warning_border}; padding: 10px; margin-bottom: 20px; font-style: italic; color: {theme.fg}; }}
+            .safety {{ background-color: {theme.primary_bg}; border-left: 4px solid {theme.primary_border}; padding: 10px; margin-top: 20px; color: {theme.fg}; }}
         </style>
         
         <h1>Welcome to EggPlot</h1>
@@ -110,5 +118,9 @@ class HelpDialog(QDialog):
 
         close_btn = QPushButton("Close Guide")
         close_btn.setFixedWidth(100)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{ background-color: {theme.panel_bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px; color: {theme.fg}; font-weight: bold; }}
+            QPushButton:hover {{ background-color: {theme.bg}; }}
+        """)
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn, alignment=Qt.AlignRight)
