@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
 )
 
 from core.constants import PHYSICS_CONSTANTS
+from core.theme import theme
 from core.data_loader import BADGERLOOP_AVAILABLE
 
 class CopyableErrorDialog(QDialog):
@@ -24,13 +25,13 @@ class CopyableErrorDialog(QDialog):
         
         lbl = QLabel(header)
         lbl.setWordWrap(True)
-        lbl.setStyleSheet("font-weight: bold; color: #d90000; font-size: 14px;")
+        lbl.setStyleSheet(f"font-weight: bold; color: {theme.danger_text}; font-size: 14px;")
         layout.addWidget(lbl)
         
         self.txt = QTextEdit()
         self.txt.setPlainText(details)
         self.txt.setReadOnly(True)
-        self.txt.setStyleSheet("background-color: #f4f4f4; border: 1px solid #ccc; font-family: Consolas, monospace; padding: 8px;")
+        self.txt.setStyleSheet(f"background-color: {theme.bg}; color: {theme.fg}; border: 1px solid {theme.border}; font-family: Consolas, monospace; padding: 8px;")
         layout.addWidget(self.txt)
         
         btn_box = QHBoxLayout()
@@ -202,7 +203,7 @@ class SweepTableDialog(QDialog):
         self.table_view.setModel(self.model)
         
         self.table_view.setAlternatingRowColors(True)
-        self.table_view.setStyleSheet("alternate-background-color: #f2f2f2; background-color: #ffffff;")
+        self.table_view.setStyleSheet(f"alternate-background-color: {theme.bg}; background-color: {theme.panel_bg}; color: {theme.fg};")
         
         font = self.table_view.font()
         font.setFamily("Consolas, DejaVu Sans Mono, Menlo, Courier New")
@@ -257,7 +258,7 @@ class ManageColumnsDialog(QDialog):
             self.delete_combo.addItem(f"{idx}: {name}", idx)
             
         form_delete.addRow("Column to delete:", self.delete_combo)
-        warning_lbl = QLabel("<br><b style='color: #d90000;'>Warning: Deleting a column is irreversible!</b>")
+        warning_lbl = QLabel(f"<br><b style='color: {theme.danger_text};'>Warning: Deleting a column is irreversible!</b>")
         warning_lbl.setAlignment(Qt.AlignCenter)
         form_delete.addRow("", warning_lbl)
         self.tab_delete.setLayout(form_delete)
@@ -416,7 +417,7 @@ class MetadataDialog(QDialog):
             general_layout.setLabelAlignment(Qt.AlignRight)
             
             general_layout.addRow("<b>File Name:</b>", QLabel(os.path.basename(dataset.filename)))
-            general_layout.addRow("<b style='color: #0055ff;'>Is this a mirror file?:</b>", QLabel(f"<span style='color: #0055ff;'><b>{is_mirror_str}</b></span>"))
+            general_layout.addRow(f"<b style='color: {theme.primary_text};'>Is this a mirror file?:</b>", QLabel(f"<span style='color: {theme.primary_text};'><b>{is_mirror_str}</b></span>"))
             
             path_label = QLineEdit(os.path.dirname(dataset.filename))
             path_label.setReadOnly(True)
@@ -465,7 +466,7 @@ class MetadataDialog(QDialog):
             
             d_name = getattr(dataset, 'name', 'Unknown')
             general_layout.addRow("<b>Name:</b>", QLabel(str(d_name)))
-            general_layout.addRow("<b style='color: #0055ff;'>Is this a mirror file?:</b>", QLabel(f"<span style='color: #0055ff;'><b>{is_mirror_str}</b></span>"))
+            general_layout.addRow(f"<b style='color: {theme.primary_text};'>Is this a mirror file?:</b>", QLabel(f"<span style='color: {theme.primary_text};'><b>{is_mirror_str}</b></span>"))
             
             d_date = getattr(dataset, 'date', None)
             date_str = d_date.strftime("%Y-%m-%d %H:%M:%S") if d_date else "Unknown"
@@ -510,7 +511,7 @@ class MetadataDialog(QDialog):
                     
                     val_str = f"{inst.get('last_value', 0.0)} {inst.get('units', '')}".strip()
                     val_item = QTableWidgetItem(val_str)
-                    val_item.setForeground(QColor("#d90000")) 
+                    val_item.setForeground(QColor(theme.danger_text)) 
                     font = val_item.font()
                     font.setBold(True)
                     val_item.setFont(font)
@@ -538,11 +539,11 @@ class MetadataDialog(QDialog):
         btn.clicked.connect(self.accept)
         layout.addWidget(btn, alignment=Qt.AlignRight)
         
-        self.setStyleSheet("""
-            QGroupBox { font-weight: bold; border: 1px solid #b0b0b0; border-radius: 6px; margin-top: 10px; padding-top: 15px; background-color: #fafafa; }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 5px; left: 10px; color: #333333; }
-            QTextEdit, QLineEdit { background-color: #fafafa; border: 1px solid #b0b0b0; border-radius: 4px; padding: 4px; }
-            QLabel { color: #222222; }
+        self.setStyleSheet(f"""
+            QGroupBox {{ font-weight: bold; border: 1px solid {theme.border}; border-radius: 6px; margin-top: 10px; padding-top: 15px; background-color: {theme.bg}; }}
+            QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; padding: 0 5px; left: 10px; color: {theme.fg}; }}
+            QTextEdit, QLineEdit {{ background-color: {theme.bg}; color: {theme.fg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 4px; }}
+            QLabel {{ color: {theme.fg}; }}
         """)
 
     def view_specific_file(self):
@@ -571,7 +572,7 @@ class ConstantsDialog(QDialog):
         btn_layout = QHBoxLayout()
         self.insert_btn = QPushButton("Insert Selected Constant")
         self.insert_btn.setEnabled(False)
-        self.insert_btn.setStyleSheet("font-weight: bold; color: #2ca02c; font-size: 14px; padding: 6px;")
+        self.insert_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; font-size: 14px; padding: 6px;")
         
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setStyleSheet("padding: 6px;")
@@ -597,7 +598,7 @@ class ConstantsDialog(QDialog):
             c = PHYSICS_CONSTANTS[key]
             
             key_item = QTableWidgetItem(f"{{{key}}}")
-            key_item.setForeground(QColor("#2ca02c"))
+            key_item.setForeground(QColor(theme.success_text))
             font = key_item.font()
             font.setBold(True)
             key_item.setFont(font)
@@ -650,7 +651,7 @@ class CreateColumnDialog(QDialog):
         cols_in_row = 0
         for i, name in self.available_columns.items():
             btn = QPushButton(name)
-            btn.setStyleSheet("color: #0055ff; font-weight: bold; border: 1px solid #0055ff; padding: 4px;")
+            btn.setStyleSheet(f"color: {theme.primary_text}; font-weight: bold; border: 1px solid {theme.primary_border}; padding: 4px;")
             btn.clicked.connect(lambda checked, n=name: self.insert_column(n))
             row_layout.addWidget(btn)
             cols_in_row += 1
@@ -669,12 +670,12 @@ class CreateColumnDialog(QDialog):
         math_lbl_layout.addStretch()
         
         self.time_btn = QPushButton("⏱ Generate Time Axis")
-        self.time_btn.setStyleSheet("font-weight: bold; color: #d90000; border: 1px solid #d90000; padding: 4px 10px;")
+        self.time_btn.setStyleSheet(f"font-weight: bold; color: {theme.danger_text}; border: 1px solid {theme.danger_border}; padding: 4px 10px;")
         self.time_btn.clicked.connect(self.generate_time_axis)
         math_lbl_layout.addWidget(self.time_btn)
         
         self.const_btn = QPushButton("✨ Physics Constants")
-        self.const_btn.setStyleSheet("font-weight: bold; color: #2ca02c; border: 1px solid #2ca02c; padding: 4px 10px;")
+        self.const_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; border: 1px solid {theme.success_border}; padding: 4px 10px;")
         self.const_btn.clicked.connect(self.open_constants)
         math_lbl_layout.addWidget(self.const_btn)
         layout.addLayout(math_lbl_layout)
@@ -691,7 +692,7 @@ class CreateColumnDialog(QDialog):
         layout.addWidget(QLabel("<b>Live Preview:</b>"))
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setStyleSheet("background-color: white; border: 1px solid #ccc; font-size: 22px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
+        self.preview_label.setStyleSheet(f"background-color: {theme.panel_bg}; color: {theme.fg}; border: 1px solid {theme.border}; font-size: 22px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
         self.preview_label.setMinimumHeight(120)
         layout.addWidget(self.preview_label)
 
@@ -804,7 +805,7 @@ class CreateColumnDialog(QDialog):
         if not self.is_valid:
             import html
             safe_text = html.escape(raw_text)
-            self.preview_label.setText(f"<span style='color: red; font-style: normal;'>{safe_text}</span>")
+            self.preview_label.setText(f"<span style='color: {theme.danger_text}; font-style: normal;'>{safe_text}</span>")
             return
 
         import re
@@ -821,9 +822,9 @@ class CreateColumnDialog(QDialog):
             c_key = m.group(1)
             if c_key in PHYSICS_CONSTANTS:
                 c_html = PHYSICS_CONSTANTS[c_key]["html"]
-                span = f"<span style='color: #2ca02c; font-weight: bold; font-style: normal;'>{c_html}</span>"
+                span = f"<span style='color: {theme.success_text}; font-weight: bold; font-style: normal;'>{c_html}</span>"
             else:
-                span = f"<span style='color: red;'>{{\\{c_key}}}</span>"
+                span = f"<span style='color: {theme.danger_text};'>{{\\{c_key}}}</span>"
             consts.append(span)
             return f"__CONST{len(consts)-1}__"
             
@@ -831,7 +832,7 @@ class CreateColumnDialog(QDialog):
         
         idx_vars = []
         def idx_repl(m):
-            idx_vars.append("<span style='color: #d90000; font-weight: bold; font-style: italic;'>index</span>")
+            idx_vars.append(f"<span style='color: {theme.danger_text}; font-weight: bold; font-style: italic;'>index</span>")
             return f"__INDEX{len(idx_vars)-1}__"
         html_text = re.sub(r'\bindex\b', idx_repl, html_text)
         
@@ -843,7 +844,7 @@ class CreateColumnDialog(QDialog):
         def func_repl(m):
             func = m.group(1).lower() 
             func = re.sub(r'_?([0-9]+)', r"<sub style='font-size:12px;'>\1</sub>", func)
-            funcs.append(f"<span style='font-style: normal; font-weight: bold; color: #222;'>{func}</span>")
+            funcs.append(f"<span style='font-style: normal; font-weight: bold; color: {theme.fg};'>{func}</span>")
             return f"__FUNC{len(funcs)-1}__"
             
         # --- NEW: ADDED abs AND norm TO REGEX ---
@@ -957,7 +958,7 @@ class CreateColumnDialog(QDialog):
             for i in range(len(consts)): html_text = html_text.replace(f"__CONST{i}__", consts[i])
             for i in range(len(idx_vars)): html_text = html_text.replace(f"__INDEX{i}__", idx_vars[i])
             for i in range(len(cols)):
-                span = f"<span style='color: #0055ff; font-weight: bold;'>{cols[i]}</span>"
+                span = f"<span style='color: {theme.primary_text}; font-weight: bold;'>{cols[i]}</span>"
                 html_text = html_text.replace(f"__COL{i}__", span)
             
         self.preview_label.setText(html_text)
