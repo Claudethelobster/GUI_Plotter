@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QLabel
 )
 from PyQt5.QtGui import QColor
+from core.theme import theme
 
 class CustomAxisItem(pg.AxisItem):
     """ Intercepts the tick drawing engine to display true logarithmic bunching and superscripts """
@@ -230,7 +231,10 @@ class TraceSettingsDialog(QDialog):
         
         btn_box = QHBoxLayout()
         ok, cancel = QPushButton("Apply"), QPushButton("Cancel")
-        ok.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        
+        # --- THEME UPDATE ---
+        ok.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
+        
         btn_box.addStretch(); btn_box.addWidget(cancel); btn_box.addWidget(ok)
         layout.addLayout(btn_box)
         
