@@ -1567,3 +1567,65 @@ class SpectrogramDialog(QDialog):
             "window": self.window_type.currentText(),
             "log": self.log_scale_cb.isChecked()
         }
+    
+class DataSlicerDialog(QDialog):
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.setWindowTitle("Data Slicer (Non-Monotonic Split)")
+        self.setMinimumWidth(450)
+        self.main_window = main_window
+        dataset = main_window.dataset
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Split a column into two halves based on a threshold.\nPerfect for isolating non-monotonic calibration curves."))
+        layout.addSpacing(10)
+
+        form = QFormLayout()
+
+        self.target_col = QComboBox()
+        self.cond_col = QComboBox()
+        for i, name in dataset.column_names.items():
+            self.target_col.addItem(f"{i}: {name}", i)
+            self.cond_col.addItem(f"{i}: {name}", i)
+
+        # Pre-select based on current plot
+        try:
+            self.cond_col.setCurrentIndex(main_window.xcol.currentIndex())
+            self.target_col.setCurrentIndex(main_window.ycol.currentIndex())
+        except Exception: pass
+
+        form.addRow("Column to Split (Y):", self.target_col)
+        form.addRow("Condition Column (X):", self.cond_col)
+
+        thresh_lay = QHBoxLayout()
+        self.thresh_edit = QLineEdit("0.0")
+        self.grab_btn = QPushButton("📍 Grab from Crosshair")
+        self.grab_btn.clicked.connect(self.grab_crosshair)
+        thresh_lay.addWidget(self.thresh_edit)
+        thresh_lay.addWidget(self.grab_btn)
+
+        form.addRow("Threshold Value:", thresh_lay)
+        layout.addLayout(form)
+
+        btn_box = QHBoxLayout()
+        ok = QPushButton("Slice Data")
+        ok.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        cancel = QPushButton("Cancel")
+        btn_box.addStretch(); btn_box.addWidget(cancel); btn_box.addWidget(ok)
+        layout.addLayout(btn_box)
+
+        ok.clicked.connect(self.accept)
+        cancel.clicked.connect(self.reject)
+
+    def grab_crosshair(self):
+        if hasattr(self.main_window, 'vLine') and self.main_window.vLine.isVisible():
+            # Grab the X-coordinate of the vertical crosshair line
+            val = self.main_window.vLine.value()
+            self.thresh_edit.setText(f"{val:.6g}")
+
+    def get_result(self):
+        target_idx = self.target_col.currentData()
+        cond_idx = self.cond_col.currentData()
+        try: thresh = float(self.thresh_edit.text())
+        except ValueError: thresh = 0.0
+        return target_idx, cond_idx, thresh, self.target_col.currentText().split(": ")[-1]
