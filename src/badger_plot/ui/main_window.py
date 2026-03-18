@@ -12,7 +12,8 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QComboBox, QStackedLayout, 
     QMessageBox, QProgressDialog, QListWidget, QAction, QGridLayout, 
     QButtonGroup, QApplication, QDialog, QFormLayout, QTextEdit,
-    QCheckBox, QTabWidget, QFontComboBox, QSlider
+    QCheckBox, QTabWidget, QFontComboBox, QSlider, QTableWidget, QTableWidgetItem,
+    QHeaderView, QSpinBox
 )
 
 # Core imports
@@ -21,15 +22,16 @@ from core.plot_worker import PlotWorkerThread
 from core.constants import PHYSICS_CONSTANTS, GREEK_MAP
 
 # UI Component imports
-from ui.custom_widgets import CustomAxisItem, DraggableLabel
+from ui.custom_widgets import CustomAxisItem, DraggableLabel, CustomLegendItem, TraceSettingsDialog
 from ui.dialogs.data_mgmt import (
     FileImportDialog, SweepTableDialog, ManageColumnsDialog, 
-    MetadataDialog, CreateColumnDialog, CopyableErrorDialog,
+    MetadataDialog, CreateColumnDialog, CopyableErrorDialog
+    
     
 )
 from ui.dialogs.analysis import (SignalProcessingDialog, PhaseSpaceDialog, PeakFinderTool,
                                  LoopAreaDialog, BaselineSubtractionDialog, AreaUnderCurveDialog,
-                                 SpectrogramDialog
+                                 SpectrogramDialog, DataSlicerDialog
 )
 from ui.dialogs.fitting import (
     FitFunctionDialog, CustomFitDialog, MultiFitManagerDialog, FitDataToFunctionWindow
@@ -236,6 +238,114 @@ class RichTextAxisLabelDialog(QDialog):
 
     def get_result(self):
         return self.input_edit.text().strip(), self.parsed_html
+    
+
+
+class LegendCustomizationDialog(QDialog):
+    def __init__(self, main_window, entries, current_aliases, group_sweeps):
+        super().__init__(main_window)
+        self.setWindowTitle("Customize Legend")
+        self.setMinimumSize(650, 500)
+        self.main_window = main_window
+        self.entries = entries 
+        self.aliases = current_aliases.copy()
+        
+        layout = QVBoxLayout(self)
+        
+        self.group_cb = QCheckBox("Group multiple sweeps into a single legend entry")
+        self.group_cb.setChecked(group_sweeps)
+        self.group_cb.setStyleSheet("font-weight: bold; color: #0055ff;")
+        layout.addWidget(self.group_cb)
+        
+        layout.addWidget(QLabel("<b>Customize Labels:</b> <i>(Leave blank to use default. Use ^ for superscripts and _ for subscripts.)</i>"))
+        
+        self.table = QTableWidget()
+        self.table.setColumnCount(2)
+        self.table.setHorizontalHeaderLabels(["Original Smart Name", "Custom Override"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        layout.addWidget(self.table)
+        
+        layout.addWidget(QLabel("<b>Live Preview:</b>"))
+        self.preview_widget = pg.GraphicsLayoutWidget()
+        self.preview_widget.setFixedHeight(150)
+        
+        bg_col = main_window.bg_color_combo.currentText()
+        self.preview_widget.setBackground(bg_col if bg_col != "Transparent" else "w")
+        
+        # Import the new custom legend locally to avoid circular dependencies
+        from ui.custom_widgets import CustomLegendItem
+        self.preview_legend = CustomLegendItem(offset=(10, 10))
+        self.preview_legend.setParentItem(self.preview_widget.ci)
+        layout.addWidget(self.preview_widget)
+        
+        btn_box = QHBoxLayout()
+        btn_ok = QPushButton("Apply")
+        btn_ok.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        btn_cancel = QPushButton("Cancel")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+        btn_box.addStretch()
+        btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_ok)
+        layout.addLayout(btn_box)
+        
+        self._populate_table()
+        self.table.itemChanged.connect(self._on_table_changed)
+        self.group_cb.stateChanged.connect(self._update_preview)
+        self._update_preview()
+
+    def _populate_table(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(self.entries))
+        for i, entry in enumerate(self.entries):
+            def_item = QTableWidgetItem(entry["base_name"])
+            def_item.setFlags(def_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(i, 0, def_item)
+            
+            custom_text = self.aliases.get(entry["sig_key"], "")
+            cust_item = QTableWidgetItem(custom_text)
+            self.table.setItem(i, 1, cust_item)
+        self.table.blockSignals(False)
+
+    def _on_table_changed(self, item):
+        if item.column() == 1:
+            row = item.row()
+            sig_key = self.entries[row]["sig_key"]
+            text = item.text().strip()
+            if text: self.aliases[sig_key] = text
+            else: self.aliases.pop(sig_key, None)
+            self._update_preview()
+
+    def _update_preview(self):
+        self.preview_legend.clear()
+        import re
+        is_grouped = self.group_cb.isChecked()
+        seen_groups = set()
+
+        for entry in self.entries:
+            if is_grouped:
+                parts = entry["sig_key"].split("_")
+                group_key = f"{parts[0]}_GROUPED_{parts[2]}_{parts[3]}" if len(parts) >= 4 else entry["sig_key"]
+                if group_key in seen_groups: continue
+                seen_groups.add(group_key)
+                
+                base_name = re.sub(r" \(Sweep \w+\)", "", entry["base_name"])
+                display_text = self.aliases.get(group_key, base_name)
+            else:
+                display_text = self.aliases.get(entry["sig_key"], entry["base_name"])
+            
+            # Mini HTML parser for preview
+            html_text = re.sub(r'\^([\w\.\-]+)', r'<sup>\1</sup>', display_text)
+            html_text = re.sub(r'_([\w\.\-]+)', r'<sub>\1</sub>', html_text)
+            
+            dummy_plot = pg.PlotDataItem(pen=entry.get("pen", 'k'), symbol=entry.get("symbol", None), symbolBrush=entry.get("brush", None))
+            self.preview_legend.addItem(dummy_plot, html_text)
+            
+    def get_result(self):
+        return self.aliases, self.group_cb.isChecked()
 
 class BadgerLoopQtGraph(QMainWindow):
     def __init__(self):
@@ -457,6 +567,14 @@ class BadgerLoopQtGraph(QMainWindow):
             btn_eye.setFixedSize(26, 26)
             btn_eye.setCursor(Qt.PointingHandCursor)
             
+            # --- NEW: Settings Button ---
+            btn_settings = QPushButton("⚙️")
+            btn_settings.setFixedSize(26, 26)
+            btn_settings.setCursor(Qt.PointingHandCursor)
+            btn_settings.setToolTip("Customize Trace Style")
+            btn_settings.setStyleSheet("border: none; font-size: 16px; color: #555;")
+            # ----------------------------
+            
             btn_axis = QPushButton(axis_side)
             btn_axis.setFixedSize(26, 26)
             btn_axis.setCursor(Qt.PointingHandCursor)
@@ -475,9 +593,11 @@ class BadgerLoopQtGraph(QMainWindow):
                 btn_axis.setStyleSheet("border: 1px solid #aaa; font-weight: bold; color: #d90000; background: #ffe6e6;")
                 
             layout.addWidget(btn_eye)
+            layout.addWidget(btn_settings)
             layout.addWidget(btn_axis)
             
             btn_eye.clicked.connect(lambda checked, r=item: self._toggle_series_visibility(r))
+            btn_settings.clicked.connect(lambda checked, r=item: self._open_trace_settings(r))
             btn_axis.clicked.connect(lambda checked, r=item: self._toggle_series_axis(r))
         else:
             label.setStyleSheet("color: black; text-decoration: none;")
@@ -528,6 +648,33 @@ class BadgerLoopQtGraph(QMainWindow):
             label.setStyleSheet("color: #aaa; text-decoration: line-through;")
             
         self.plot()
+        
+    def _open_trace_settings(self, item):
+        row = self.series_list.row(item)
+        if row < 0: return
+        pair = self.series_data[self.plot_mode][row]
+        
+        # Build default style if it doesn't exist yet
+        if "style" not in pair:
+            try: line_thick = float(self.line_thickness_edit.text())
+            except: line_thick = 2.0
+            try: pt_size = int(self.point_size_edit.text())
+            except: pt_size = 5
+            
+            pair["style"] = {
+                "type": self.graphtype.currentText(),
+                "color": None,
+                "line_style": "Solid",
+                "line_width": line_thick,
+                "symbol": self.symbol_combo.currentText(),
+                "symbol_size": pt_size
+            }
+            
+        pair_name = f"{pair.get('y_name', 'Y')} vs {pair.get('x_name', 'X')}"
+        dlg = TraceSettingsDialog(pair["style"], pair_name, self)
+        if dlg.exec() == QDialog.Accepted:
+            pair["style"] = dlg.get_result()
+            self.plot() # Instantly redraw
         
     def _set_interaction_mode(self, btn):
         text = btn.text()
@@ -997,6 +1144,149 @@ class BadgerLoopQtGraph(QMainWindow):
             return
 
         self._show_actual_baseline_dialog()
+        
+    def open_data_slicer(self):
+        if not self.dataset: return
+        
+        if self.file_type == "MultiCSV":
+            self._intercept_folder_edit(self._show_actual_data_slicer)
+            return
+            
+        fname = self.dataset.filename
+        orig_name = os.path.basename(fname)
+        directory = os.path.dirname(fname)
+
+        if not orig_name.startswith("MIRROR_") and self.file_type != "ConcatenatedCSV":
+            name_only, ext = os.path.splitext(orig_name)
+            import glob
+            search_pattern = os.path.join(directory, f"MIRROR_{name_only}*{ext}")
+            existing_mirrors = [os.path.basename(p) for p in glob.glob(search_pattern)]
+
+            if not existing_mirrors:
+                target_file = os.path.join(directory, f"MIRROR_{orig_name}")
+                try: 
+                    if self.file_type in ["CSV", "ConcatenatedCSV"]: self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                except Exception as e:
+                    from PyQt5.QtWidgets import QMessageBox
+                    QMessageBox.critical(self, "Error", f"Failed to create mirror:\n{e}")
+                    return
+            else:
+                from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton
+                dlg_mirror = QDialog(self)
+                dlg_mirror.setWindowTitle("Mirror File Exists")
+                dlg_mirror.setFixedSize(450, 150)
+                l = QVBoxLayout(dlg_mirror)
+                l.addWidget(QLabel("Select an existing mirror to load, or create a new one:"))
+                combo = QComboBox()
+                combo.addItem("--- Create New Mirror ---")
+                combo.addItems(existing_mirrors)
+                l.addWidget(combo)
+                
+                btn_box = QHBoxLayout()
+                ok, cancel = QPushButton("OK"), QPushButton("Cancel")
+                btn_box.addWidget(ok); btn_box.addWidget(cancel)
+                l.addLayout(btn_box)
+                
+                ok.clicked.connect(dlg_mirror.accept); cancel.clicked.connect(dlg_mirror.reject)
+                if dlg_mirror.exec() != QDialog.Accepted: return
+                
+                choice = combo.currentText()
+                if choice == "--- Create New Mirror ---":
+                    import re
+                    max_num = max([int(m.group(1)) for m in [re.search(r'\((\d+)\)', x) for x in existing_mirrors] if m] + [1 if f"MIRROR_{orig_name}" in existing_mirrors else 0])
+                    target_file = os.path.join(directory, f"MIRROR_{name_only} ({max_num + 1}){ext}")
+                    
+                    if self.file_type in ["CSV", "ConcatenatedCSV"]: self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                else:
+                    target_file = os.path.join(directory, choice)
+
+            opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+            if self.file_type == "CSV": opts["delimiter"] = ","
+                
+            from PyQt5.QtWidgets import QProgressDialog
+            self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setCancelButton(None)
+            self.progress_dialog.setMinimumDuration(0)
+            self.progress_dialog.show()
+
+            def on_mirror_loaded(dataset):
+                self._on_load_finished(dataset, target_file, opts)
+                self._show_actual_data_slicer() 
+
+            self.loader_thread = DataLoaderThread(target_file, opts)
+            self.loader_thread.progress.connect(self._update_progress_ui)
+            self.loader_thread.finished.connect(on_mirror_loaded)
+            self.loader_thread.error.connect(self._on_load_error)
+            self.loader_thread.start()
+            return
+
+        self._show_actual_data_slicer()
+
+    def _show_actual_data_slicer(self):
+        dlg = DataSlicerDialog(self)
+        if dlg.exec() != QDialog.Accepted: return
+        
+        target_idx, cond_idx, thresh, target_name = dlg.get_result()
+        
+        is_csv = (self.file_type == "CSV")
+        sweeps = range(self.dataset.num_sweeps) if not is_csv else [0]
+        
+        blocks_below = []
+        blocks_above = []
+        
+        for sw in sweeps:
+            arr = self.dataset.data if is_csv else self.dataset.sweeps[sw].data
+            cond_data = np.asarray(arr[:, cond_idx], dtype=np.float64)
+            target_data = np.asarray(arr[:, target_idx], dtype=np.float64)
+            
+            with np.errstate(invalid='ignore'):
+                mask_below = cond_data <= thresh
+                mask_above = cond_data > thresh
+            
+            data_below = target_data.copy()
+            data_below[~mask_below] = np.nan
+            
+            data_above = target_data.copy()
+            data_above[~mask_above] = np.nan
+            
+            blocks_below.append(data_below)
+            blocks_above.append(data_above)
+            
+        name_below = f"{target_name} (<= {thresh:g})"
+        name_above = f"{target_name} (> {thresh:g})"
+        
+        try:
+            self._append_column_to_file(self.dataset.filename, name_below, blocks_below)
+            self._append_column_to_file(self.dataset.filename, name_above, blocks_above)
+            
+            from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QApplication
+            QMessageBox.information(self, "Success", f"Successfully sliced data at {thresh:g}.\n\nCreated:\n1. {name_below}\n2. {name_above}")
+            
+            opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+            self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setCancelButton(None)
+            self.progress_dialog.setMinimumDuration(0)
+            self.progress_dialog.show()
+            QApplication.processEvents()
+            
+            self.loader_thread = DataLoaderThread(self.dataset.filename, opts)
+            self.loader_thread.progress.connect(self._update_progress_ui)
+            self.loader_thread.finished.connect(lambda ds: self._on_load_finished(ds, self.dataset.filename, opts))
+            self.loader_thread.error.connect(self._on_load_error)
+            self.loader_thread.start()
+            
+        except Exception as e:
+            import traceback
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Execution Error", f"Failed to slice data:\n\n{e}\n\n{traceback.format_exc()}")
 
     def _show_actual_baseline_dialog(self):
         from PyQt5.QtWidgets import QMessageBox, QDialog, QApplication, QProgressDialog
@@ -1479,6 +1769,7 @@ class BadgerLoopQtGraph(QMainWindow):
         analysis_menu = menubar.addMenu("Analysis")
         
         # Top-level items
+        analysis_menu.addAction("Data Slicer (Split Non-Monotonic)").triggered.connect(self.open_data_slicer)
         analysis_menu.addAction("Signal Processing (Smooth / Calculus)").triggered.connect(self.open_signal_processing)
         analysis_menu.addAction("Baseline Subtraction Tool").triggered.connect(self.open_baseline_subtraction)
         analysis_menu.addAction("Phase Space Generator (x vs dx/dt)").triggered.connect(self.open_phase_space_dialog)
@@ -2052,7 +2343,10 @@ class BadgerLoopQtGraph(QMainWindow):
                     else: 
                         val = flat_calc[data_row_idx] if data_row_idx < len(flat_calc) else np.nan 
                         data_row_idx += 1
-                        out.append(f"{clean_line}{delim}{val:.6g}\n")
+                        
+                        # --- FIX ---
+                        val_str = "" if np.isnan(val) else f"{val:.6g}"
+                        out.append(f"{clean_line}{delim}{val_str}\n")
                         
                 with open(filepath, "w", encoding='utf-8-sig') as f:
                     f.writelines(out)
@@ -2098,7 +2392,10 @@ class BadgerLoopQtGraph(QMainWindow):
                 else: 
                     val = flat_calc[data_row_idx] if data_row_idx < len(flat_calc) else np.nan 
                     data_row_idx += 1
-                    out.append(f"{clean_line}{delim}{val:.6g}\n")
+                    
+                    # --- FIX ---
+                    val_str = "" if np.isnan(val) else f"{val:.6g}"
+                    out.append(f"{clean_line}{delim}{val_str}\n")
                     
             with open(target_file, "w", encoding='utf-8-sig') as f:
                 f.writelines(out)
@@ -2189,7 +2486,10 @@ class BadgerLoopQtGraph(QMainWindow):
                             val = np.nan 
                             
                         parts = clean_line.split('\t')
-                        parts.insert(target_col_idx, f"{val:.6g}") 
+                        
+                        # --- FIX ---
+                        val_str = "" if np.isnan(val) else f"{val:.6g}"
+                        parts.insert(target_col_idx, val_str) 
                         out.append("\t".join(parts) + "\n")
                     else:
                         out.append(line) 
@@ -2633,9 +2933,14 @@ class BadgerLoopQtGraph(QMainWindow):
             "plot_item": plot_item, "equation": raw_eq,
             "html_equation": html_eq, "raw_equation": raw_eq, 
             "param_config": param_config,
-            "x_raw": x_raw, "y_raw": y_raw
+            "x_raw": x_raw, "y_raw": y_raw,
+            # --- ADD THESE THREE LINES ---
+            "x_idx": pair['x'], "aux_cols": used_cols,
+            "callable": lambda x_arr, aux_arrs: plot_model(x_arr, aux_arrs, *final_params)
+            # -----------------------------
         })
         self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
+        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True) # <--- AND THIS
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
 
     def _get_all_plotted_xy(self, apply_selection=False, aux_cols=None):
@@ -2913,10 +3218,12 @@ class BadgerLoopQtGraph(QMainWindow):
             "name": fit_name, "type": "polynomial", "degree": degree,
             "coeffs": final_params, "callable": poly, "plot_item": plot_item,
             "equation": "y = " + " + ".join(f"{c:.3g}x^{i}" for i, c in enumerate(final_params[::-1])),
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw
+            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
+            "x_idx": pair['x']
         })
         self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
+        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
 
     def fit_logarithmic(self, base_text, param_config):
         res = self._get_all_plotted_xy(apply_selection=True)
@@ -2952,10 +3259,12 @@ class BadgerLoopQtGraph(QMainWindow):
         self.active_fits.append({
             "name": fit_name, "type": "logarithmic", "base": base_text, "params": final_params,
             "callable": lambda v: model(v, *final_params), "plot_item": plot_item,
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw
+            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
+            "x_idx": pair['x']
         })
         self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
+        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
 
     def fit_exponential(self, param_config):
         res = self._get_all_plotted_xy(apply_selection=True)
@@ -2984,10 +3293,12 @@ class BadgerLoopQtGraph(QMainWindow):
         self.active_fits.append({
             "name": fit_name, "type": "exponential", "params": final_params,
             "callable": lambda v: model(v, *final_params), "plot_item": plot_item,
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw
+            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
+            "x_idx": pair['x']
         })
         self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
+        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
 
     def fit_gaussian(self, param_config):
         res = self._get_all_plotted_xy(apply_selection=True)
@@ -3020,10 +3331,12 @@ class BadgerLoopQtGraph(QMainWindow):
         self.active_fits.append({
             "name": fit_name, "type": "gaussian", "params": final_params,
             "callable": lambda v: model(v, *final_params), "plot_item": plot_item,
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw
+            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
+            "x_idx": pair['x']
         })
         self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
+        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
 
     def fit_lorentzian(self, param_config):
         res = self._get_all_plotted_xy(apply_selection=True)
@@ -3056,10 +3369,12 @@ class BadgerLoopQtGraph(QMainWindow):
         self.active_fits.append({
             "name": fit_name, "type": "lorentzian", "params": final_params,
             "callable": lambda v: model(v, *final_params), "plot_item": plot_item,
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw
+            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
+            "x_idx": pair['x']
         })
         self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
         if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
+        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
 
     def clear_fit(self):
         if not getattr(self, 'active_fits', []): return
@@ -3083,6 +3398,7 @@ class BadgerLoopQtGraph(QMainWindow):
                     
         if not self.active_fits:
             self.save_function_btn.setVisible(False)
+            if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(False)
             self.clear_fit_btn.setVisible(False)
             if hasattr(self, 'func_details_btn'): self.func_details_btn.setVisible(False)
             if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(False)
@@ -3117,6 +3433,155 @@ class BadgerLoopQtGraph(QMainWindow):
                 for p in fit["params"]: f.write(f"{p}\n")
             else:
                 for p in fit["params"]: f.write(f"{p}\n")
+                
+    def export_fit_to_column(self):
+        if not getattr(self, 'active_fits', []): return
+        
+        if len(self.active_fits) == 1:
+            fit = self.active_fits[0]
+        else:
+            from ui.dialogs.fitting import MultiFitManagerDialog
+            dlg = MultiFitManagerDialog(self.active_fits, "Export", self)
+            if dlg.exec() == QDialog.Accepted:
+                _, idx = dlg.get_selection()
+                fit = self.active_fits[idx]
+            else:
+                return
+
+        from PyQt5.QtWidgets import QInputDialog, QLineEdit, QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton
+        default_name = f"Fit_{fit['type'].capitalize()}"
+        new_name, ok = QInputDialog.getText(self, "Export Fit", "Enter a name for the new column:", QLineEdit.Normal, default_name)
+        if not ok or not new_name.strip(): return
+        new_name = new_name.strip()
+
+        if self.file_type == "MultiCSV":
+            self._intercept_folder_edit(lambda: self._execute_export_fit_to_column(fit, new_name))
+            return
+
+        fname = self.dataset.filename
+        orig_name = os.path.basename(fname)
+        directory = os.path.dirname(fname)
+
+        if not orig_name.startswith("MIRROR_") and self.file_type != "ConcatenatedCSV":
+            name_only, ext = os.path.splitext(orig_name)
+            import glob
+            search_pattern = os.path.join(directory, f"MIRROR_{name_only}*{ext}")
+            existing_mirrors = [os.path.basename(p) for p in glob.glob(search_pattern)]
+
+            if not existing_mirrors:
+                target_file = os.path.join(directory, f"MIRROR_{orig_name}")
+                try: 
+                    if self.file_type == "CSV": self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to create mirror:\n{e}")
+                    return
+                QMessageBox.information(self, "Mirror Created", "To protect original data, a Mirror file has been created and loaded.")
+            else:
+                dlg = QDialog(self)
+                dlg.setWindowTitle("Mirror File Exists")
+                dlg.setFixedSize(450, 150)
+                l = QVBoxLayout(dlg)
+                l.addWidget(QLabel("Select an existing mirror to load, or create a new one:"))
+                combo = QComboBox()
+                combo.addItem("--- Create New Mirror ---")
+                combo.addItems(existing_mirrors)
+                l.addWidget(combo)
+                btn_box = QHBoxLayout()
+                ok_btn, cancel_btn = QPushButton("OK"), QPushButton("Cancel")
+                btn_box.addWidget(ok_btn); btn_box.addWidget(cancel_btn)
+                l.addLayout(btn_box)
+                ok_btn.clicked.connect(dlg.accept); cancel_btn.clicked.connect(dlg.reject)
+                if dlg.exec() != QDialog.Accepted: return
+                
+                choice = combo.currentText()
+                if choice == "--- Create New Mirror ---":
+                    import re
+                    max_num = max([int(m.group(1)) for m in [re.search(r'\((\d+)\)', x) for x in existing_mirrors] if m] + [1 if f"MIRROR_{orig_name}" in existing_mirrors else 0])
+                    target_file = os.path.join(directory, f"MIRROR_{name_only} ({max_num + 1}){ext}")
+                    if self.file_type == "CSV": self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                else:
+                    target_file = os.path.join(directory, choice)
+
+            opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+            if self.file_type == "CSV": opts["delimiter"] = ","
+            
+            self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setCancelButton(None) 
+            self.progress_dialog.setMinimumDuration(0) 
+            self.progress_dialog.show()
+
+            def on_mirror_loaded(dataset):
+                self._on_load_finished(dataset, target_file, opts)
+                self._execute_export_fit_to_column(fit, new_name) 
+
+            self.loader_thread = DataLoaderThread(target_file, opts)
+            self.loader_thread.progress.connect(self._update_progress_ui)
+            self.loader_thread.finished.connect(on_mirror_loaded)
+            self.loader_thread.error.connect(self._on_load_error)
+            self.loader_thread.start()
+            return
+
+        self._execute_export_fit_to_column(fit, new_name)
+
+    def _execute_export_fit_to_column(self, fit, new_name):
+        is_csv = (self.file_type == "CSV")
+        sweeps = range(self.dataset.num_sweeps) if not is_csv else [0]
+        
+        calculated_data_blocks = []
+        x_idx = fit.get("x_idx", 0)
+        
+        for sw in sweeps:
+            arr = self.dataset.data if is_csv else self.dataset.sweeps[sw].data
+            x_raw = np.asarray(arr[:, x_idx], dtype=np.float64)
+            
+            # Evaluate the function directly on the exact physical X-coordinates
+            with np.errstate(all='ignore'):
+                if fit["type"] == "custom":
+                    aux_cols = fit.get("aux_cols", [])
+                    aux_dict = {c: np.asarray(arr[:, c], dtype=np.float64) for c in aux_cols}
+                    y_calc = fit["callable"](x_raw, aux_dict)
+                else:
+                    y_calc = fit["callable"](x_raw)
+                    
+            if not isinstance(y_calc, np.ndarray):
+                y_calc = np.full(len(x_raw), y_calc)
+                
+            y_calc = np.asarray(y_calc, dtype=np.float64)
+            y_calc[~np.isfinite(y_calc)] = np.nan
+            
+            calculated_data_blocks.append(y_calc)
+            
+        try:
+            self._append_column_to_file(self.dataset.filename, new_name, calculated_data_blocks)
+            
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Success", f"Fit exported to column '{new_name}' successfully.")
+            
+            opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+            self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setCancelButton(None)
+            self.progress_dialog.setMinimumDuration(0)
+            self.progress_dialog.show()
+            QApplication.processEvents()
+            
+            self.loader_thread = DataLoaderThread(self.dataset.filename, opts)
+            self.loader_thread.progress.connect(self._update_progress_ui)
+            self.loader_thread.finished.connect(lambda ds: self._on_load_finished(ds, self.dataset.filename, opts))
+            self.loader_thread.error.connect(self._on_load_error)
+            self.loader_thread.start()
+            
+        except Exception as e:
+            import traceback
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Execution Error", f"Failed to export fit:\n\n{e}\n\n{traceback.format_exc()}")
 
     def open_fit_data_to_function(self):
         if not self.dataset: return
@@ -3229,10 +3694,19 @@ class BadgerLoopQtGraph(QMainWindow):
         # -- TAB 3: Traces --
         tab3 = QWidget()
         l3 = QFormLayout(tab3)
+        
+        # --- NEW: Explanation Label ---
+        info_lbl = QLabel("<i>Settings here act as defaults for newly added traces.<br>Use the ⚙️ icon in the Active Series list to override them individually.</i>")
+        info_lbl.setWordWrap(True)
+        l3.addRow(info_lbl)
+        # ------------------------------
+
         self.graphtype = QComboBox()
-        self.graphtype.addItems(["Line", "Scatter", "FFT (Spectrum)", "Surface"]) 
+        self.graphtype.addItems(["Line", "Scatter", "Line + Scatter", "Surface"]) 
         self.graphtype.currentTextChanged.connect(self._update_graphtype_ui)
-        l3.addRow("Graph Type:", self.graphtype)
+        l3.addRow("Default Graph Type:", self.graphtype)
+        # ... (keep the rest of Tab 3 the same) ...
+        tabs.addTab(tab3, "Default Trace Styles") # <--- Renamed Tab
 
         self.line_thickness_edit = QLineEdit("2")
         l3.addRow("Line Thickness:", self.line_thickness_edit)
@@ -3341,6 +3815,42 @@ class BadgerLoopQtGraph(QMainWindow):
         btn_lay.addWidget(apply_btn)
         ld_layout.addLayout(btn_lay)
         
+        # -- TAB 6: Legend Cosmetics --
+        tab6 = QWidget()
+        l6 = QFormLayout(tab6)
+        
+        self.leg_cols = QSpinBox()
+        self.leg_cols.setRange(1, 10)
+        self.leg_cols.setValue(1)
+        
+        self.leg_opacity = QSlider(Qt.Horizontal)
+        self.leg_opacity.setRange(0, 255)
+        self.leg_opacity.setValue(230)
+        
+        self.leg_border = QDoubleSpinBox()
+        self.leg_border.setRange(0, 10)
+        self.leg_border.setSingleStep(0.5)
+        self.leg_border.setValue(1.5)
+        
+        self.leg_spacing = QSpinBox()
+        self.leg_spacing.setRange(0, 50)
+        self.leg_spacing.setValue(0)
+        
+        l6.addRow("Column Count:", self.leg_cols)
+        l6.addRow("Background Opacity (0-255):", self.leg_opacity)
+        l6.addRow("Border Thickness:", self.leg_border)
+        l6.addRow("Item Spacing:", self.leg_spacing)
+        
+        # --- NEW: Connect for real-time live updates ---
+        self.leg_cols.valueChanged.connect(self._apply_legend_live)
+        self.leg_opacity.valueChanged.connect(self._apply_legend_live)
+        self.leg_border.valueChanged.connect(self._apply_legend_live)
+        self.leg_spacing.valueChanged.connect(self._apply_legend_live)
+        self.bg_color_combo.currentTextChanged.connect(self._apply_legend_live)
+        # -----------------------------------------------
+        
+        tabs.addTab(tab6, "Legend Cosmetics")
+        
     def _edit_3d_axis_label(self, axis_key):
         # Determine fallback name based on current selected columns
         if axis_key == "x_3d": default = self.dataset.column_names.get(max(0, self.xcol.currentIndex()), "X")
@@ -3379,6 +3889,10 @@ class BadgerLoopQtGraph(QMainWindow):
         self.settings.setValue("gl_scale_z", self.gl_scale_z.value())
         self.settings.setValue("gl_lighting", self.gl_lighting_cb.isChecked())
         self.settings.setValue("gl_stem", self.gl_stem_cb.isChecked())
+        self.settings.setValue("leg_cols", self.leg_cols.value())
+        self.settings.setValue("leg_opacity", self.leg_opacity.value())
+        self.settings.setValue("leg_border", self.leg_border.value())
+        self.settings.setValue("leg_spacing", self.leg_spacing.value())
         QMessageBox.information(self, "Saved", "Plot formatting defaults saved successfully.\nThey will automatically load next time you launch EggPlot.")
 
     def _apply_canvas_settings(self):
@@ -3446,6 +3960,7 @@ class BadgerLoopQtGraph(QMainWindow):
         controls.addWidget(self.toggle_uncert_btn)
         
         self.errorbar_btn = QPushButton("Toggle Error Bars")
+        self.errorbar_btn.setCheckable(True)
         self.errorbar_btn.clicked.connect(self.toggle_errorbars)
         self.errorbar_btn.setVisible(False)
         controls.addWidget(self.errorbar_btn)
@@ -3592,6 +4107,13 @@ class BadgerLoopQtGraph(QMainWindow):
         self.save_function_btn.setVisible(False)
         controls.addWidget(self.save_function_btn)
         
+        # --- NEW: EXPORT FIT TO COLUMN BUTTON ---
+        self.save_fit_col_btn = QPushButton("Export Fit to Column")
+        self.save_fit_col_btn.clicked.connect(self.export_fit_to_column)
+        self.save_fit_col_btn.setVisible(False)
+        controls.addWidget(self.save_fit_col_btn)
+        # ----------------------------------------
+        
         self.clear_fit_btn = QPushButton("Clear Plot")
         self.clear_fit_btn.clicked.connect(self.clear_fit)
         self.clear_fit_btn.setVisible(False)
@@ -3600,9 +4122,13 @@ class BadgerLoopQtGraph(QMainWindow):
         self.plot_widget.setBackground("w")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.35)
         
-        self.legend = self.plot_widget.addLegend(offset=(10, 10))
-        self.fit_legend = pg.LegendItem(offset=(-10, 10))
+        self.legend = CustomLegendItem(offset=(10, 10))
+        self.legend.setParentItem(self.plot_widget.getViewBox())
+        self.legend.sigDoubleClicked.connect(self.open_legend_customizer)
+        
+        self.fit_legend = CustomLegendItem(offset=(-10, 10))
         self.fit_legend.setParentItem(self.plot_widget.getViewBox())
+        self.fit_legend.sigDoubleClicked.connect(self.open_legend_customizer)
         
         for ax in ("left", "bottom", "right", "top"):
             self.plot_widget.showAxis(ax)
@@ -3710,6 +4236,16 @@ class BadgerLoopQtGraph(QMainWindow):
         # ---------------------------------
         
         self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
+
+    def open_legend_customizer(self, legend_item):
+        if not hasattr(self, 'current_legend_entries') or not self.current_legend_entries: return
+        dlg = LegendCustomizationDialog(self, self.current_legend_entries, self.legend_aliases, getattr(self, 'group_sweeps_legend', False))
+        if dlg.exec() == QDialog.Accepted:
+            new_aliases, group_sweeps = dlg.get_result()
+            self.legend_aliases = new_aliases
+            self.group_sweeps_legend = group_sweeps
+            self.settings.setValue("group_sweeps_legend", group_sweeps)
+            self.plot()
 
     def toggle_crosshairs(self):
         self.crosshairs_enabled = not getattr(self, 'crosshairs_enabled', False)
@@ -4016,7 +4552,11 @@ class BadgerLoopQtGraph(QMainWindow):
         self.plot()
         
     def toggle_errorbars(self):
-        self.errorbars_enabled = not self.errorbars_enabled
+        self.errorbars_enabled = self.errorbar_btn.isChecked()
+        if self.errorbars_enabled:
+            self.errorbar_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        else:
+            self.errorbar_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
         self.plot()
 
     def _fix_graphics_view(self):
@@ -4222,6 +4762,13 @@ class BadgerLoopQtGraph(QMainWindow):
         self.errorbar_sigma_edit.setText(self.settings.value("errorbar_sigma", "1.0"))
         
         self.errorbars_enabled = self.settings.value("errorbars", False, bool)
+        # --- ADD THESE 5 LINES ---
+        self.errorbar_btn.setChecked(self.errorbars_enabled)
+        if self.errorbars_enabled:
+            self.errorbar_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+        else:
+            self.errorbar_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+        # -------------------------
         self.errorbar_btn.setVisible(self.average_enabled)
         self.errorbar_sigma_edit.setVisible(self.average_enabled)
         self.graphtype.setCurrentText(self.settings.value("graphtype", "Line"))
@@ -4255,6 +4802,10 @@ class BadgerLoopQtGraph(QMainWindow):
     
         if self.last_file and os.path.exists(self.last_file):
             try:
+                self.leg_cols.setValue(int(self.settings.value("leg_cols", 1)))
+                self.leg_opacity.setValue(int(self.settings.value("leg_opacity", 230)))
+                self.leg_border.setValue(float(self.settings.value("leg_border", 1.5)))
+                self.leg_spacing.setValue(int(self.settings.value("leg_spacing", 0)))
                 # Retrieve saved load options
                 opts_str = self.settings.value("last_load_opts", "")
                 try: self.last_load_opts = json.loads(opts_str) if opts_str else {}
@@ -4410,6 +4961,14 @@ class BadgerLoopQtGraph(QMainWindow):
         super().closeEvent(e)
 
     def open_file(self):
+        self._is_plotting = False # --- EMERGENCY UNLOCK ---
+        if hasattr(self, 'plot_thread') and self.plot_thread.isRunning():
+            try: self.plot_thread.terminate()
+            except: pass
+        if hasattr(self, 'loader_thread') and self.loader_thread.isRunning():
+            try: self.loader_thread.terminate()
+            except: pass
+            
         fname, _ = QFileDialog.getOpenFileName(self, "Open Data File", "", "All supported files (*.txt *.csv *.h5 *.hdf5);;Text files (*.txt);;CSV files (*.csv);;HDF5 files (*.h5 *.hdf5);;All files (*)")
         if not fname: return
 
@@ -4678,62 +5237,69 @@ class BadgerLoopQtGraph(QMainWindow):
             self.progress_dialog.setValue(percent)
 
     def _on_load_finished(self, dataset, fname, opts):
-        self.progress_dialog.setLabelText("File loaded. Preparing plot...")
-        self.file_type = opts["type"]
-        # --- NEW: Auto-upgrade to multi-sweep mode! ---
-        if getattr(dataset, 'is_concatenated', False):
-            self.file_type = "ConcatenatedCSV"
-            opts["type"] = "ConcatenatedCSV"
-        # ----------------------------------------------
-        self.last_file = fname
-        self.dataset = dataset
-        self.last_load_opts = opts 
-        
-        if hasattr(self, 'active_fits') and self.active_fits:
-            for fit in self.active_fits:
-                self.plot_widget.removeItem(fit["plot_item"])
-            self.active_fits.clear()
-            self.fit_legend.clear()
-            self.save_function_btn.setVisible(False)
-            self.clear_fit_btn.setVisible(False)
-            if hasattr(self, 'func_details_btn'): self.func_details_btn.setVisible(False)
-            if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(False)
-        
-        self.legend_aliases.clear()
-        self.populate_columns()
-        max_idx = len(dataset.column_names) - 1
-        default_pair = {
-            "x": 0, "y": min(1, max_idx), "z": min(2, max_idx),
-            "x_name": dataset.column_names.get(0, "X"),
-            "y_name": dataset.column_names.get(min(1, max_idx), "Y"),
-            "z_name": dataset.column_names.get(min(2, max_idx), "Z")
-        }
-        
-        for mode in ["2D", "3D", "Heatmap", "Histogram"]:  # <-- Added Histogram here
-            if getattr(self, 'series_data', None) and self.series_data.get(mode):
-                for pair in self.series_data[mode]:
-                    pair['x'] = min(pair.get('x', 0), max_idx)
-                    pair['y'] = min(pair.get('y', 0), max_idx)
-                    pair['z'] = min(pair.get('z', 0), max_idx)
-                    pair['x_name'] = dataset.column_names.get(pair['x'], "X")
-                    pair['y_name'] = dataset.column_names.get(pair['y'], "Y")
-                    pair['z_name'] = dataset.column_names.get(pair['z'], "Z")
-            else:
-                if not hasattr(self, 'series_data'): self.series_data = {}
-                self.series_data[mode] = [dict(default_pair)]
+        try:
+            self.progress_dialog.setLabelText("File loaded. Preparing plot...")
+            self.file_type = opts["type"]
+            if getattr(dataset, 'is_concatenated', False):
+                self.file_type = "ConcatenatedCSV"
+                opts["type"] = "ConcatenatedCSV"
+                
+            self.last_file = fname
+            self.dataset = dataset
+            self.last_load_opts = opts 
+            
+            if hasattr(self, 'active_fits') and self.active_fits:
+                for fit in self.active_fits:
+                    self.plot_widget.removeItem(fit["plot_item"])
+                self.active_fits.clear()
+                self.fit_legend.clear()
+                self.save_function_btn.setVisible(False)
+                if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(False)
+                self.clear_fit_btn.setVisible(False)
+                if hasattr(self, 'func_details_btn'): self.func_details_btn.setVisible(False)
+                if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(False)
+            
+            self.legend_aliases.clear()
+            self.populate_columns()
+            max_idx = len(dataset.column_names) - 1
+            default_pair = {
+                "x": 0, "y": min(1, max_idx), "z": min(2, max_idx),
+                "x_name": dataset.column_names.get(0, "X"),
+                "y_name": dataset.column_names.get(min(1, max_idx), "Y"),
+                "z_name": dataset.column_names.get(min(2, max_idx), "Z")
+            }
+            
+            for mode in ["2D", "3D", "Heatmap", "Histogram"]:  
+                if getattr(self, 'series_data', None) and self.series_data.get(mode):
+                    for pair in self.series_data[mode]:
+                        pair['x'] = min(pair.get('x', 0), max_idx)
+                        pair['y'] = min(pair.get('y', 0), max_idx)
+                        pair['z'] = min(pair.get('z', 0), max_idx)
+                        pair['x_name'] = dataset.column_names.get(pair['x'], "X")
+                        pair['y_name'] = dataset.column_names.get(pair['y'], "Y")
+                        pair['z_name'] = dataset.column_names.get(pair['z'], "Z")
+                else:
+                    if not hasattr(self, 'series_data'): self.series_data = {}
+                    self.series_data[mode] = [dict(default_pair)]
 
-        self.update_file_mode_ui()
-        current_pair = self.series_data[self.plot_mode][0]
-        self.xcol.blockSignals(True); self.ycol.blockSignals(True); self.zcol.blockSignals(True)
-        self.xcol.setCurrentIndex(current_pair['x'])
-        self.ycol.setCurrentIndex(current_pair['y'])
-        if self.zcol.count() > current_pair.get('z', 0):
-            self.zcol.setCurrentIndex(current_pair.get('z', 0))
-        self.xcol.blockSignals(False); self.ycol.blockSignals(False); self.zcol.blockSignals(False)
-        
-        self._refresh_series_list_ui()
-        self.custom_axis_labels = {"bottom": None, "left": None, "top": None, "right": None}
-        self.plot()
+            self.update_file_mode_ui()
+            current_pair = self.series_data[self.plot_mode][0]
+            self.xcol.blockSignals(True); self.ycol.blockSignals(True); self.zcol.blockSignals(True)
+            self.xcol.setCurrentIndex(current_pair['x'])
+            self.ycol.setCurrentIndex(current_pair['y'])
+            if self.zcol.count() > current_pair.get('z', 0):
+                self.zcol.setCurrentIndex(current_pair.get('z', 0))
+            self.xcol.blockSignals(False); self.ycol.blockSignals(False); self.zcol.blockSignals(False)
+            
+            self._refresh_series_list_ui()
+            self.custom_axis_labels = {"bottom": None, "left": None, "top": None, "right": None}
+            self.plot()
+            
+        except Exception as e:
+            if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
+            import traceback
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Load Error", f"Failed to process loaded file:\n\n{e}\n\n{traceback.format_exc()}")
 
     def _on_load_error(self, err_msg):
         if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
@@ -4845,11 +5411,27 @@ class BadgerLoopQtGraph(QMainWindow):
             for sample, label in self.fit_legend.items:
                 label.setFont(leg_font)
                 label.setText(label.text, color=axis_color)
+                
+    def _apply_legend_live(self, *args):
+        bg = self.bg_color_combo.currentText()
+        fg = 'w' if bg == "Black" else 'k'  # Dynamically set border/text color
+        op = self.leg_opacity.value()
+        bw = self.leg_border.value()
+        cols = self.leg_cols.value()
+        sp = self.leg_spacing.value()
+        
+        if hasattr(self, 'legend') and self.legend:
+            self.legend.update_style(bg, fg, op, bw, cols, sp)
+        if hasattr(self, 'fit_legend') and self.fit_legend:
+            self.fit_legend.update_style(bg, fg, op, bw, cols, sp)
 
     def parse_list(self, text):
-        if text.strip() == "-1": return -1
-        if ":" in text: return list(range(*map(int, text.split(":"))))
-        return [int(x) for x in text.split(",")]
+        try:
+            if not text or text.strip() in ["", "-1"]: return -1
+            if ":" in text: return list(range(*map(int, text.split(":"))))
+            return [int(x) for x in text.split(",") if x.strip()]
+        except Exception:
+            return -1
         
     def _parse_log_base(self, text):
         t = text.strip().lower()
@@ -5061,9 +5643,12 @@ class BadgerLoopQtGraph(QMainWindow):
             self.plot_thread.finished_heatmap.connect(self._draw_heatmap)
             self.plot_thread.error.connect(self._on_plot_error)
             self.plot_thread.start()
-        except Exception:
+        except Exception as e:
             self._is_plotting = False
             if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
+            import traceback
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Plotting Error", f"Failed to initialize the plot engine:\n\n{e}\n\n{traceback.format_exc()}")
         
     def _on_plot_error(self, err_msg):
         self._is_plotting = False
@@ -5072,6 +5657,7 @@ class BadgerLoopQtGraph(QMainWindow):
         else: CopyableErrorDialog("Plotting Error", "An error occurred while mathematically processing the data:", err_msg, self).exec()
 
     def _draw_2d(self, packages, show_legend):
+        self.current_legend_entries = []
         # --- NEW: Route Histogram data to its dedicated renderer ---
         if getattr(self, 'plot_mode', '2D') == "Histogram":
             self._draw_histogram(packages, show_legend)
@@ -5152,14 +5738,14 @@ class BadgerLoopQtGraph(QMainWindow):
             # --- NEW: Smart Axis & Text Coloring ---
             bg_val = self.bg_color_combo.currentText()
             if bg_val == "Black":
-                vis_color = 'w'
-                hid_color = 'k'
+                vis_color = '#ffffff'
+                hid_color = '#000000'
             elif bg_val == "Transparent":
-                vis_color = 'k'
+                vis_color = '#000000'
                 hid_color = (0, 0, 0, 0)
             else: # White
-                vis_color = 'k'
-                hid_color = 'w'
+                vis_color = '#000000'
+                hid_color = '#ffffff'
             # ---------------------------------------
 
             main_vb = self.plot_widget.getViewBox()
@@ -5281,6 +5867,32 @@ class BadgerLoopQtGraph(QMainWindow):
                 rgba = cmap(intensity)
                 line_color = (int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), 255)
                 
+                # --- NEW: GRAB STYLE FROM THE UI SOURCE OF TRUTH ---
+                original_pair = self.series_data.get("2D", [])[pair_idx] if pair_idx < len(self.series_data.get("2D", [])) else {}
+                style = original_pair.get("style", {})
+                
+                trace_type = style.get("type", graphtype)
+                
+                try: line_thick = float(style.get("line_width", self.line_thickness_edit.text() if self.line_thickness_edit.text() else 2.0))
+                except: line_thick = 2.0
+                
+                try: pt_size = int(style.get("symbol_size", self.point_size_edit.text() if self.point_size_edit.text().isdigit() else 5))
+                except: pt_size = 5
+                
+                sym_raw = style.get("symbol", self.symbol_combo.currentText())
+                sym = sym_map.get(sym_raw, "o")
+                
+                pen_styles = {"Solid": Qt.SolidLine, "Dashed": Qt.DashLine, "Dotted": Qt.DotLine, "Dash-Dot": Qt.DashDotLine}
+                pen_style = pen_styles.get(style.get("line_style", "Solid"), Qt.SolidLine)
+                
+                if style.get("color"):
+                    from PyQt5.QtGui import QColor
+                    c = QColor(style["color"])
+                    line_color = (c.red(), c.green(), c.blue(), 255)
+                    
+                trace_pen = pg.mkPen(line_color, width=line_thick, style=pen_style)
+                # ---------------------------------------------------
+                
                 # --- SMART AUTO-NAMING ENGINE ---
                 base_name = y_name
                 
@@ -5289,17 +5901,34 @@ class BadgerLoopQtGraph(QMainWindow):
                     
                 if pkg_type == "average":
                     base_name += " (Average)"
-                elif total_plotted_sw > 1:
+                elif total_plotted_sw > 1 and not getattr(self, 'group_sweeps_legend', False):
                     base_name += f" (Sweep {sw})"
                     
                 if axis_side == "R":
                     base_name += " [R]"
                     
-                # Generate a unique mathematical signature for this specific line
-                sig_key = f"{pair_idx}_{sw}_{pkg_type}_{axis_side}"
+                # Generate a unique mathematical signature
+                if getattr(self, 'group_sweeps_legend', False):
+                    sig_key = f"{pair_idx}_GROUPED_{pkg_type}_{axis_side}"
+                else:
+                    sig_key = f"{pair_idx}_{sw}_{pkg_type}_{axis_side}"
                 
                 # Pull from the memory bank if the user overrode it
                 legend_name = self.legend_aliases.get(sig_key, base_name)
+                
+                # Mini HTML parse for the final legend output!
+                import re
+                html_name = re.sub(r'\^([\w\.\-]+)', r'<sup>\1</sup>', legend_name)
+                html_name = re.sub(r'_([\w\.\-]+)', r'<sub>\1</sub>', html_name)
+
+                # Store for the customizer dialog
+                if not hasattr(self, 'current_legend_entries'): self.current_legend_entries = []
+                if not any(e["sig_key"] == sig_key for e in self.current_legend_entries):
+                    self.current_legend_entries.append({
+                        "sig_key": sig_key, "base_name": base_name, 
+                        "pen": trace_pen, 
+                        "brush": pg.mkBrush(line_color), "symbol": sym
+                    })
                 # --------------------------------
                 
                 target_vb = self.vb_right if axis_side == "R" else self.plot_widget
@@ -5322,15 +5951,15 @@ class BadgerLoopQtGraph(QMainWindow):
                     
                     scatter.setData(x=np.array([pkg["x_mean"]], dtype=np.float64), 
                                     y=np.array([pkg["y_mean"]], dtype=np.float64), 
-                                    size=pt_size + 3, pen=pg.mkPen(None), brush=pg.mkBrush(line_color), symbol=sym) # <--- Changed
+                                    size=pt_size + 3, pen=pg.mkPen(None), brush=pg.mkBrush(line_color), symbol=sym)
                     scatter.setVisible(True)
                     
-                    if show_legend and legend_name not in added_to_legend:
-                        self.legend.addItem(scatter, legend_name)
-                        added_to_legend.add(legend_name)
-                        # Inject the click event into the newly created label
-                        sample, label_item = self.legend.items[-1]
-                        bind_double_click(label_item, sig_key, legend_name)
+                    if show_legend:
+                        if sig_key not in added_to_legend:
+                            self.legend.addItem(scatter, html_name)
+                            added_to_legend.add(sig_key)
+                            sample, label_item = self.legend.items[-1]
+                            bind_double_click(label_item, sig_key, legend_name)
                         
                     scatter_idx += 1
                     
@@ -5348,40 +5977,51 @@ class BadgerLoopQtGraph(QMainWindow):
                         err_idx += 1
                     
                 elif pkg["type"] == "standard":
-                    if graphtype in ["Line", "FFT (Spectrum)"]:
+                    if "Line" in trace_type or trace_type == "FFT (Spectrum)":
                         if curve_idx >= len(self.curve_pool):
-                            c = pg.PlotCurveItem(skipFiniteCheck=True, autoDownsample=True)
+                            c = pg.PlotCurveItem(connect="finite", autoDownsample=True)
                             self.curve_pool.append(c)
                             
                         curve = self.curve_pool[curve_idx]
                         target_vb.addItem(curve)
-                        curve.setData(pkg["x"], pkg["y"], pen=pg.mkPen(line_color, width=line_thick)) # <--- Changed
+                        curve.setData(pkg["x"], pkg["y"], pen=trace_pen) 
                         curve.setVisible(True)
                         
-                        if show_legend:
-                            if total_plotted_sw <= 15 or legend_name not in added_to_legend:
-                                self.legend.addItem(curve, legend_name)
-                                added_to_legend.add(legend_name)
-                                sample, label_item = self.legend.items[-1]
-                                bind_double_click(label_item, sig_key, legend_name)
+                        if show_legend and "Scatter" not in trace_type:
+                            if sig_key not in added_to_legend:
+                                if getattr(self, 'group_sweeps_legend', False) or len(added_to_legend) < 50:
+                                    self.legend.addItem(curve, html_name)
+                                    added_to_legend.add(sig_key)
+                                    sample, label_item = self.legend.items[-1]
+                                    bind_double_click(label_item, sig_key, legend_name)
                                 
                         curve_idx += 1
-                    else:
+                        
+                    if "Scatter" in trace_type:
                         if scatter_idx >= len(self.scatter_pool):
                             s = pg.ScatterPlotItem(pxMode=True)
                             self.scatter_pool.append(s)
                             
                         scatter = self.scatter_pool[scatter_idx]
                         target_vb.addItem(scatter)
-                        scatter.setData(x=pkg["x"], y=pkg["y"], size=pt_size, pen=pg.mkPen(None), brush=pg.mkBrush(line_color), symbol=sym) # <--- Changed
+                        
+                        x_pts, y_pts = np.asarray(pkg["x"]), np.asarray(pkg["y"])
+                        valid = np.isfinite(x_pts) & np.isfinite(y_pts)
+                        scatter.setData(x=x_pts[valid], y=y_pts[valid], size=pt_size, pen=pg.mkPen(None), brush=pg.mkBrush(line_color), symbol=sym)
                         scatter.setVisible(True) 
                         
                         if show_legend:
-                            if total_plotted_sw <= 15 or legend_name not in added_to_legend:
-                                self.legend.addItem(scatter, legend_name)
-                                added_to_legend.add(legend_name)
-                                sample, label_item = self.legend.items[-1]
-                                bind_double_click(label_item, sig_key, legend_name)
+                            if sig_key not in added_to_legend:
+                                if getattr(self, 'group_sweeps_legend', False) or len(added_to_legend) < 50:
+                                    if "Line" in trace_type:
+                                        proxy = pg.PlotDataItem(pen=trace_pen, symbol=sym, symbolBrush=pg.mkBrush(line_color), symbolSize=pt_size)
+                                        self.legend.addItem(proxy, html_name)
+                                    else:
+                                        self.legend.addItem(scatter, html_name)
+                                        
+                                    added_to_legend.add(sig_key)
+                                    sample, label_item = self.legend.items[-1]
+                                    bind_double_click(label_item, sig_key, legend_name)
                                 
                         scatter_idx += 1
 
@@ -5435,6 +6075,10 @@ class BadgerLoopQtGraph(QMainWindow):
                 else:
                     self.clear_selection()
             # =========================================================================
+
+            # --- APPLY LEGEND COSMETICS ---
+            self._apply_legend_live()
+            # ------------------------------
 
         except Exception as e:
             import traceback
@@ -5649,6 +6293,13 @@ class BadgerLoopQtGraph(QMainWindow):
                 num_sweeps_plotted = len(all_pts_raw)
                 
                 for idx, (i, sw, pts) in enumerate(all_pts_raw):
+                    
+                    # --- CRITICAL FIX: STRIP NANS FOR OPENGL ---
+                    valid = np.isfinite(pts[:, 0]) & np.isfinite(pts[:, 1]) & np.isfinite(pts[:, 2])
+                    pts = pts[valid]
+                    if len(pts) == 0: continue
+                    # -------------------------------------------
+                    
                     norm_pts = np.zeros_like(pts, dtype=np.float32)
                     norm_pts[:, 0] = (pts[:, 0] - mins[0]) * scale_factors[0]
                     norm_pts[:, 1] = (pts[:, 1] - mins[1]) * scale_factors[1]
