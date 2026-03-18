@@ -38,6 +38,8 @@ from ui.dialogs.fitting import (
 )
 from ui.dialogs.help import HelpDialog
 
+from ui.dialogs.settings import PreferencesDialog
+
 try:
     import pyqtgraph.opengl as gl
     from PyQt5.QtGui import QPainter, QTextDocument, QColor, QVector3D
@@ -351,8 +353,20 @@ class BadgerLoopQtGraph(QMainWindow):
     def __init__(self):
         super().__init__()
         self.series_data = {"2D": [], "3D": [], "Heatmap": [], "Histogram": []}
-        self.settings = QSettings("BadgerLoop", "QtPlotter")
-    
+        
+        # --- NEW: PORTABLE MODE CHECK ---
+        local_ini = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "settings.ini")
+        if os.path.exists(local_ini):
+            self.settings = QSettings(local_ini, QSettings.IniFormat)
+        else:
+            self.settings = QSettings("BadgerLoop", "QtPlotter")
+            
+        # --- NEW: DISABLE OPENGL OVERRIDE ---
+        if self.settings.value("disable_opengl", False, bool):
+            global OPENGL_AVAILABLE
+            OPENGL_AVAILABLE = False
+        # --------------------------------
+        
         self.dataset = None
         self.last_file = None
         self.legend_visible = True
@@ -1751,6 +1765,13 @@ class BadgerLoopQtGraph(QMainWindow):
         self.concat_folder_action.setEnabled(False) # Disabled by default
         file_menu.addAction(self.concat_folder_action)
         # ---------------------
+        
+        # --- NEW: EDIT MENU ---
+        edit_menu = menubar.addMenu("Edit")
+        prefs_action = QAction("Preferences...", self)
+        prefs_action.triggered.connect(self.open_preferences)
+        edit_menu.addAction(prefs_action)
+        # ----------------------
     
         # Inspect Menu
         inspect_menu = menubar.addMenu("Inspect")
@@ -1900,6 +1921,50 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def show_help(self):
         HelpDialog(self).exec()
+        
+    def open_preferences(self):
+        from ui.dialogs.settings import PreferencesDialog
+        dlg = PreferencesDialog(self)
+        
+        was_portable = self.settings.value("portable_mode", False, bool)
+        was_dark = self.settings.value("dark_mode", False, bool)
+        
+        if dlg.exec() == QDialog.Accepted:
+            new_settings = dlg.get_results()
+            
+            # --- HANDLE PORTABLE MODE MIGRATION ---
+            is_portable = new_settings["portable_mode"]
+            local_ini = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "settings.ini")
+            
+            if is_portable and not was_portable:
+                # Migrate System Registry -> Local INI
+                new_settings_obj = QSettings(local_ini, QSettings.IniFormat)
+                for key in self.settings.allKeys():
+                    new_settings_obj.setValue(key, self.settings.value(key))
+                self.settings = new_settings_obj
+            elif not is_portable and was_portable:
+                # Migrate Local INI -> System Registry
+                new_settings_obj = QSettings("BadgerLoop", "QtPlotter")
+                for key in self.settings.allKeys():
+                    new_settings_obj.setValue(key, self.settings.value(key))
+                self.settings = new_settings_obj
+                if os.path.exists(local_ini):
+                    try: os.remove(local_ini)
+                    except: pass
+            # --------------------------------------
+            
+            # Save the new values
+            for key, val in new_settings.items():
+                self.settings.setValue(key, val)
+                
+            # Apply live updates
+            if hasattr(self, 'proxy'):
+                self.proxy.disconnect() # Kill the old proxy
+                # Rebuild it from scratch with the new rate limit
+                self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=new_settings["crosshair_poll_rate"], slot=self.mouse_moved)
+                
+            if new_settings["dark_mode"] != was_dark:
+                QMessageBox.information(self, "Restart Required", "Theme changes will fully take effect after you restart the application.")
         
     def manage_columns_dialog(self):
         if not self.dataset: return
@@ -4575,21 +4640,46 @@ class BadgerLoopQtGraph(QMainWindow):
         menu.aboutToShow.connect(fix_palette)
 
     def _apply_styles(self):
+        app = QApplication.instance()
+        
+        # --- NEW: DARK MODE ENGINE ---
+        if self.settings.value("dark_mode", False, bool):
+            if app:
+                app.setStyle("Fusion")
+                dark_palette = QPalette()
+                dark_palette.setColor(QPalette.Window, QColor(53, 53, 53))
+                dark_palette.setColor(QPalette.WindowText, Qt.white)
+                dark_palette.setColor(QPalette.Base, QColor(35, 35, 35))
+                dark_palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
+                dark_palette.setColor(QPalette.ToolTipBase, Qt.white)
+                dark_palette.setColor(QPalette.ToolTipText, Qt.white)
+                dark_palette.setColor(QPalette.Text, Qt.white)
+                dark_palette.setColor(QPalette.Button, QColor(53, 53, 53))
+                dark_palette.setColor(QPalette.ButtonText, Qt.white)
+                dark_palette.setColor(QPalette.BrightText, Qt.red)
+                dark_palette.setColor(QPalette.Link, QColor(42, 130, 218))
+                dark_palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
+                dark_palette.setColor(QPalette.HighlightedText, Qt.black)
+                app.setPalette(dark_palette)
+                
+            self.setStyleSheet("""
+                QPushButton { background-color: #444; border: 1px solid #666; border-radius: 4px; padding: 6px; color: white; }
+                QPushButton:hover { background-color: #555; }
+                QPushButton:pressed { background-color: #333; }
+                QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background-color: #222; color: white; border: 1px solid #555; padding: 4px; }
+            """)
+            return
+        # -----------------------------
+        # Default Light Mode
+        if app: 
+            app.setStyle("Fusion")
+            app.setPalette(app.style().standardPalette()) # <--- CRITICAL FIX: Restores default OS colors
+            
         self.setStyleSheet("""
-            QPushButton {
-                background-color: #f5f5f5;
-                border: 1px solid #8a8a8a;
-                border-radius: 4px;
-                padding: 6px;
-            }
+            QPushButton { background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black; }
             QPushButton:hover { background-color: #e6e6e6; }
             QPushButton:pressed { background-color: #d0d0d0; }
-            QLineEdit, QComboBox {
-                background-color: white;
-                color: black;
-                border: 1px solid #8a8a8a;
-                padding: 4px;
-            }
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background-color: white; color: black; border: 1px solid #8a8a8a; padding: 4px; }
         """)
 
     def _init_3d_scene(self, data_bounds=None, scales=(1.0, 1.0, 1.0)):
