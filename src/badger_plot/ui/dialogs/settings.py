@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QCheckBox, QLineEdit, QPushButton, QLabel, 
     QSlider, QFileDialog, QMessageBox
 )
+from core.theme import theme
 
 class PreferencesDialog(QDialog):
     def __init__(self, main_window):
@@ -25,7 +26,7 @@ class PreferencesDialog(QDialog):
         
         btn_box = QHBoxLayout()
         ok_btn = QPushButton("Save & Apply")
-        ok_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        ok_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         cancel_btn = QPushButton("Cancel")
         
         ok_btn.clicked.connect(self.accept)
@@ -66,7 +67,7 @@ class PreferencesDialog(QDialog):
         
         # Nuclear Option
         btn_reset = QPushButton("Reset to Factory Defaults")
-        btn_reset.setStyleSheet("color: #d90000; font-weight: bold;")
+        btn_reset.setStyleSheet(f"color: {theme.danger_text}; font-weight: bold;")
         btn_reset.clicked.connect(self.factory_reset)
         form.addRow("Memory Wipe:", btn_reset)
         
