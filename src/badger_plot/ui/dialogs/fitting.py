@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 )
 
 from badger_plot.core.constants import PHYSICS_CONSTANTS, GREEK_MAP
+from core.theme import theme
 from badger_plot.ui.dialogs.data_mgmt import ConstantsDialog, CopyableErrorDialog
 from badger_plot.utils.function_io import load_function_from_file
 
@@ -58,11 +59,11 @@ class FitFunctionDialog(QDialog):
 
         btn_box = QHBoxLayout()
         self.auto_guess_btn = QPushButton("✨ Auto-Guess Values")
-        self.auto_guess_btn.setStyleSheet("font-weight: bold; color: #2ca02c; padding: 6px;")
+        self.auto_guess_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; padding: 6px;")
         self.auto_guess_btn.clicked.connect(self.run_auto_guess)
         
         self.apply_btn = QPushButton("Calculate & Apply Fit")
-        self.apply_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        self.apply_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         self.apply_btn.clicked.connect(self.accept)
         
         cancel_btn = QPushButton("Cancel")
@@ -227,12 +228,12 @@ class CustomFitDialog(QDialog):
         btn_layout = QHBoxLayout()
         
         btn_x = QPushButton("x (Independent Variable)")
-        btn_x.setStyleSheet("color: #d90000; font-weight: bold; border: 1px solid #d90000; padding: 4px;")
+        btn_x.setStyleSheet(f"color: {theme.danger_text}; font-weight: bold; border: 1px solid {theme.danger_border}; padding: 4px;")
         btn_x.clicked.connect(lambda: self.equation_input.textCursor().insertText("x"))
         btn_layout.addWidget(btn_x)
         
         self.const_btn = QPushButton("✨ Physics Constants")
-        self.const_btn.setStyleSheet("font-weight: bold; color: #2ca02c; border: 1px solid #2ca02c; padding: 4px;")
+        self.const_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; border: 1px solid {theme.success_border}; padding: 4px;")
         self.const_btn.clicked.connect(self.open_constants)
         btn_layout.addWidget(self.const_btn)
         layout.addLayout(btn_layout)
@@ -247,7 +248,7 @@ class CustomFitDialog(QDialog):
         cols_in_row = 0
         for i, name in self.available_columns.items():
             btn = QPushButton(f"[{name}]")
-            btn.setStyleSheet("color: #0055ff; font-weight: bold; border: 1px solid #0055ff; padding: 4px;")
+            btn.setStyleSheet(f"color: {theme.primary_text}; font-weight: bold; border: 1px solid {theme.primary_border}; padding: 4px;")
             btn.clicked.connect(lambda checked, n=name: self.equation_input.textCursor().insertText(f"[{n}]"))
             row_layout.addWidget(btn)
             cols_in_row += 1
@@ -277,7 +278,7 @@ class CustomFitDialog(QDialog):
         math_lbl_layout.addStretch()
         
         self.load_func_btn = QPushButton("📂 Load Saved Function")
-        self.load_func_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 4px 10px;")
+        self.load_func_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 4px 10px;")
         self.load_func_btn.clicked.connect(self.load_custom_function)
         math_lbl_layout.addWidget(self.load_func_btn)
         
@@ -291,7 +292,8 @@ class CustomFitDialog(QDialog):
 
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setStyleSheet("background-color: white; border: 1px solid #ccc; font-size: 22px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
+        # --- THEME UPDATE: Fix the background and text color of the preview box ---
+        self.preview_label.setStyleSheet(f"background-color: {theme.panel_bg}; color: {theme.fg}; border: 1px solid {theme.border}; font-size: 22px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
         self.preview_label.setMinimumHeight(100)
         layout.addWidget(self.preview_label)
 
@@ -309,7 +311,7 @@ class CustomFitDialog(QDialog):
         btn_box = QHBoxLayout()
         
         self.auto_guess_btn = QPushButton("✨ Auto-Guess Values")
-        self.auto_guess_btn.setStyleSheet("font-weight: bold; color: #2ca02c; padding: 6px;")
+        self.auto_guess_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; padding: 6px;")
         self.auto_guess_btn.clicked.connect(self.run_auto_guess)
         self.auto_guess_btn.setEnabled(False) 
         
@@ -319,7 +321,7 @@ class CustomFitDialog(QDialog):
         self.optimize_btn.setEnabled(False)
         
         self.done_btn = QPushButton("Done")
-        self.done_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        self.done_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         self.done_btn.clicked.connect(self.handle_done)
         
         cancel_btn = QPushButton("Cancel")
@@ -582,7 +584,7 @@ class CustomFitDialog(QDialog):
         
         display_name = GREEK_MAP.get(p, p)
         btn = QPushButton(f"{{{display_name}}}")
-        btn.setStyleSheet("color: #800080; font-weight: bold; border: 1px solid #800080; padding: 4px;")
+        btn.setStyleSheet(f"color: {theme.warning_text}; font-weight: bold; border: 1px solid {theme.warning_border}; padding: 4px;")
         btn.clicked.connect(lambda checked, n=p: self.equation_input.textCursor().insertText(f"{{{n}}}"))
         self.param_btn_layout.addWidget(btn)
         
@@ -591,7 +593,7 @@ class CustomFitDialog(QDialog):
         
         lbl = QLabel(display_name)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("font-weight: bold; color: #800080; font-size: 16px;")
+        lbl.setStyleSheet(f"font-weight: bold; color: {theme.warning_text}; font-size: 16px;")
         self.param_table.setCellWidget(row, 0, lbl)
         
         mode_cb = QComboBox()
@@ -691,8 +693,8 @@ class CustomFitDialog(QDialog):
             c_key = m.group(1)
             if c_key in PHYSICS_CONSTANTS:
                 c_html = PHYSICS_CONSTANTS[c_key]["html"]
-                span = f"<span style='color: #2ca02c; font-weight: bold; font-style: normal;'>{c_html}</span>"
-            else: span = f"<span style='color: red;'>{{\\{c_key}}}</span>"
+                span = f"<span style='color: {theme.success_text}; font-weight: bold; font-style: normal;'>{c_html}</span>"
+            else: span = f"<span style='color: {theme.danger_text};'>{{\\{c_key}}}</span>"
             consts.append(span); return f"__CONST{len(consts)-1}__"
         html_text = re.sub(r'\{\\(.*?)\}', const_repl, html_text)
 
@@ -701,14 +703,14 @@ class CustomFitDialog(QDialog):
             p_key = m.group(1)
             if p_key in self.parameters:
                 p_html = GREEK_MAP.get(p_key, p_key)
-                span = f"<span style='color: #800080; font-weight: bold; font-style: normal;'>{p_html}</span>"
-            else: span = f"<span style='color: red;'>{{{p_key}}}</span>"
+                span = f"<span style='color: {theme.warning_text}; font-weight: bold; font-style: normal;'>{p_html}</span>"
+            else: span = f"<span style='color: {theme.danger_text};'>{{{p_key}}}</span>"
             params_html.append(span); return f"__PARAM{len(params_html)-1}__"
         html_text = re.sub(r'\{(.*?)\}', param_repl, html_text)
 
         xvars = []
         def x_repl(m):
-            xvars.append("<span style='color: #d90000; font-weight: bold; font-style: italic;'>x</span>")
+            xvars.append(f"<span style='color: {theme.danger_text}; font-weight: bold; font-style: italic;'>x</span>")
             return f"__XVAR{len(xvars)-1}__"
         html_text = re.sub(r'\bx\b', x_repl, html_text)
         
@@ -719,10 +721,8 @@ class CustomFitDialog(QDialog):
         def func_repl(m):
             func = m.group(1).lower()
             func = re.sub(r'_?([0-9]+)', r"<sub style='font-size:12px;'>\1</sub>", func)
-            funcs.append(f"<span style='font-style: normal; font-weight: bold; color: #222;'>{func}</span>")
+            funcs.append(f"<span style='font-style: normal; font-weight: bold; color: {theme.fg};'>{func}</span>")
             return f"__FUNC{len(funcs)-1}__"
-        # Add |abs|norm to the end of this regex:
-        html_text = re.sub(r'\b(arcsin|arccos|arctan|arcsinh|arccosh|arctanh|sinh|cosh|tanh|sin|cos|tan|ln|log(?:_?[0-9]+)?|exp|abs|norm)\b', func_repl, html_text, flags=re.IGNORECASE)
 
         def tokenize_to_horizontal(text, f_size):
             parts = re.split(r'(__COL\d+__|__FUNC\d+__|__PAREN\d+__|__EXP\d+__|__CONST\d+__|__PARAM\d+__|__XVAR\d+__)', text)
@@ -777,7 +777,7 @@ class CustomFitDialog(QDialog):
             for i in range(len(consts)): html_text = html_text.replace(f"__CONST{i}__", consts[i])
             for i in range(len(params_html)): html_text = html_text.replace(f"__PARAM{i}__", params_html[i])
             for i in range(len(xvars)): html_text = html_text.replace(f"__XVAR{i}__", xvars[i])
-            for i in range(len(cols)): html_text = html_text.replace(f"__COL{i}__", f"<span style='color: #0055ff; font-weight: bold;'>{cols[i]}</span>")
+            for i in range(len(cols)): html_text = html_text.replace(f"__COL{i}__", f"<span style='color: {theme.primary_text}; font-weight: bold;'>{cols[i]}</span>")
             
         self.html_equation = html_text
         self.preview_label.setText(html_text)
@@ -877,13 +877,13 @@ class MultiFitManagerDialog(QDialog):
         
         btn_box = QHBoxLayout()
         self.btn_action = QPushButton(action_name)
-        self.btn_action.setStyleSheet("font-weight: bold; color: #0055ff;")
+        self.btn_action.setStyleSheet(f"font-weight: bold; color: {theme.primary_text};")
         self.btn_cancel = QPushButton("Cancel")
         
         if action_name == "Delete":
-            self.btn_action.setStyleSheet("font-weight: bold; color: #d90000;")
+            self.btn_action.setStyleSheet(f"font-weight: bold; color: {theme.danger_text};")
             self.btn_all = QPushButton("Delete All")
-            self.btn_all.setStyleSheet("font-weight: bold; color: #d90000;")
+            self.btn_all.setStyleSheet(f"font-weight: bold; color: {theme.danger_text};")
             btn_box.addWidget(self.btn_all)
             self.btn_all.clicked.connect(self.accept_all)
         
