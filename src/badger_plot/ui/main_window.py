@@ -2995,7 +2995,21 @@ class BadgerLoopQtGraph(QMainWindow):
 
         sort_idx = np.argsort(x_full)
         x_sorted = x_full[sort_idx]
-        sorted_aux = {c: safe_aux_full[c][sort_idx] for c in used_cols}
+        
+        # --- FIX: Smooth Cubic Spline Interpolation for Auxiliary Columns ---
+        from scipy.interpolate import make_interp_spline
+        x_unique, unique_idx = np.unique(x_sorted, return_index=True)
+        xfit = np.linspace(x_unique[0], x_unique[-1], 500)
+        
+        smooth_aux = {}
+        for c in used_cols:
+            y_unq = safe_aux_full[c][sort_idx][unique_idx]
+            if len(x_unique) > 3:
+                spline = make_interp_spline(x_unique, y_unq, k=3)
+                smooth_aux[c] = spline(xfit)
+            else:
+                smooth_aux[c] = np.interp(xfit, x_unique, y_unq)
+        # --------------------------------------------------------------------
         
         def plot_model(x_arr, aux_arrs, *args):
             env = {"np": np, "e": np.e, "pi": np.pi, "x": x_arr, "data_dict": aux_arrs}
@@ -3004,16 +3018,16 @@ class BadgerLoopQtGraph(QMainWindow):
             if res_arr.ndim == 0: res_arr = np.full_like(x_arr, float(res_arr))
             return res_arr
             
-        yfit = plot_model(x_sorted, sorted_aux, *final_params)
+        yfit = plot_model(xfit, smooth_aux, *final_params)
 
         import pyqtgraph as pg
         from PyQt5.QtCore import Qt
-        plot_item = self.plot_widget.plot(x_sorted, yfit, pen=pg.mkPen("r", width=2, style=Qt.DashLine))
+        plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("r", width=2, style=Qt.DashLine))
         fit_name = f"Custom Fit ➔ {pair['y_name']}"
         self.fit_legend.addItem(plot_item, fit_name)
 
         if not hasattr(self, 'active_fits'): self.active_fits = []
-        x_raw, y_raw = self._get_raw_fit_coords(x_sorted, yfit) 
+        x_raw, y_raw = self._get_raw_fit_coords(xfit, yfit)
         self.active_fits.append({
             "name": fit_name, "type": "custom", 
             "params": final_params, "param_names": param_names,
@@ -3208,7 +3222,21 @@ class BadgerLoopQtGraph(QMainWindow):
 
                 sort_idx = np.argsort(x_full)
                 x_sorted = x_full[sort_idx]
-                sorted_aux = {c: safe_aux_full[c][sort_idx] for c in used_cols}
+                
+                # --- FIX: Smooth Cubic Spline Interpolation for Auxiliary Columns ---
+                from scipy.interpolate import make_interp_spline
+                x_unique, unique_idx = np.unique(x_sorted, return_index=True)
+                xfit = np.linspace(x_unique[0], x_unique[-1], 500)
+                
+                smooth_aux = {}
+                for c in used_cols:
+                    y_unq = safe_aux_full[c][sort_idx][unique_idx]
+                    if len(x_unique) > 3:
+                        spline = make_interp_spline(x_unique, y_unq, k=3)
+                        smooth_aux[c] = spline(xfit)
+                    else:
+                        smooth_aux[c] = np.interp(xfit, x_unique, y_unq)
+                # --------------------------------------------------------------------
                 
                 def plot_model(x_arr, aux_arrs, *args):
                     env = {"np": np, "e": np.e, "pi": np.pi, "x": x_arr, "data_dict": aux_arrs}
@@ -3217,15 +3245,15 @@ class BadgerLoopQtGraph(QMainWindow):
                     if res_arr.ndim == 0: res_arr = np.full_like(x_arr, float(res_arr))
                     return res_arr
 
-                yfit = plot_model(x_sorted, sorted_aux, *final_params)
+                yfit = plot_model(xfit, smooth_aux, *final_params)
 
                 import pyqtgraph as pg
                 from PyQt5.QtCore import Qt
-                plot_item = self.plot_widget.plot(x_sorted, yfit, pen=pg.mkPen("r", width=2, style=Qt.DashLine))
+                plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("r", width=2, style=Qt.DashLine))
                 fit_name = f"Custom Fit ➔ {pair['y_name']}"
                 self.fit_legend.addItem(plot_item, fit_name)
 
-                x_raw, y_raw = self._get_raw_fit_coords(x_sorted, yfit) 
+                x_raw, y_raw = self._get_raw_fit_coords(xfit, yfit)
                 self.active_fits.append({
                     "name": fit_name, "type": "custom", 
                     "params": final_params, "param_names": param_names,
@@ -5626,6 +5654,11 @@ class BadgerLoopQtGraph(QMainWindow):
         for axis in axes_to_update:
             axis.label.setFont(label_font)
             axis.setStyle(tickFont=tick_font)
+            
+            # --- FIX: Disable Auto SI Prefixing using the correct method ---
+            axis.enableAutoSIPrefix(False)
+            # ---------------------------------------------------------------
+            
             axis.setPen(pg.mkPen(axis_color, width=axis_thick))
             
             # CRITICAL FIX: Force PyQtGraph to delete its old pixel cache so the line can shrink!
