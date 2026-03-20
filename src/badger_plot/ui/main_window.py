@@ -1808,26 +1808,8 @@ class BadgerLoopQtGraph(QMainWindow):
         crosshair_action.triggered.connect(self.toggle_crosshairs)
         inspect_menu.addAction(crosshair_action)
         
-        # Analysis Menu
-        analysis_menu = menubar.addMenu("Analysis")
-        
-        # Top-level items
-        analysis_menu.addAction("Data Slicer (Split Non-Monotonic)").triggered.connect(self.open_data_slicer)
-        analysis_menu.addAction("Signal Processing (Smooth / Calculus)").triggered.connect(self.open_signal_processing)
-        analysis_menu.addAction("Baseline Subtraction Tool").triggered.connect(self.open_baseline_subtraction)
-        analysis_menu.addAction("Phase Space Generator (x vs dx/dt)").triggered.connect(self.open_phase_space_dialog)
-        
-        analysis_menu.addSeparator()
-        
-        # Sub-menu 1: Fourier Analysis
-        fourier_menu = analysis_menu.addMenu("Fourier Analysis")
-        fourier_menu.addAction("Automated Peak Finder & iFFT Surgeon").triggered.connect(self.open_peak_finder)
-        fourier_menu.addAction("Spectrogram / STFT (Time-Frequency)").triggered.connect(self.open_spectrogram)
-        
-        # Sub-menu 2: Area Calculators
-        area_menu = analysis_menu.addMenu("Area Calculators")
-        area_menu.addAction("Area Under Curve (Definite Integral)").triggered.connect(self.open_area_under_curve)
-        area_menu.addAction("Enclosed Loop Area Calculator").triggered.connect(self.open_loop_area_calculator)
+        # Analysis Menu (Saved as self so we can dynamically rebuild it)
+        self.analysis_menu = menubar.addMenu("Analysis")
         
         # Layout Menu
         layout_menu = menubar.addMenu("Layout")
@@ -1836,11 +1818,12 @@ class BadgerLoopQtGraph(QMainWindow):
         layout_action.triggered.connect(self.open_layout_dialog)
         layout_menu.addAction(layout_action)
     
-        # Fitting Menu
+        # Fitting Menu (Saved as self so we can dynamically rebuild it)
         self.fitting_menu = menubar.addMenu("Fitting")
-        self.fitting_menu.addAction("Fit common function to data").triggered.connect(self.open_fit_function_dialog)
-        self.fitting_menu.addAction("Fit custom function to data").triggered.connect(self.open_custom_fit_dialog)
-        self.fitting_menu.addAction("Fit data to function").triggered.connect(self.open_fit_data_to_function)
+        
+        # --- NEW: Populate menus based on initial mode ---
+        self._update_context_menus()
+        # -------------------------------------------------
 
         # Plot Mode Menu
         plot_mode_menu = menubar.addMenu("Plot Mode")
@@ -2283,7 +2266,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
             if hasattr(self.dataset, 'data') and self.dataset.data is not None:
                 for row in self.dataset.data:
-                    clean_row = ["" if np.isnan(val) else f"{val:.6g}" for val in row]
+                    clean_row = ["NaN" if np.isnan(val) else f"{val:.6g}" for val in row]
                     writer.writerow(clean_row)
 
     def _show_actual_create_column_dialog(self):
@@ -2432,7 +2415,7 @@ class BadgerLoopQtGraph(QMainWindow):
                         data_row_idx += 1
                         
                         # --- FIX ---
-                        val_str = "" if np.isnan(val) else f"{val:.6g}"
+                        val_str = "NaN" if np.isnan(val) else f"{val:.6g}"
                         out.append(f"{clean_line}{delim}{val_str}\n")
                         
                 with open(filepath, "w", encoding='utf-8-sig') as f:
@@ -2481,7 +2464,7 @@ class BadgerLoopQtGraph(QMainWindow):
                     data_row_idx += 1
                     
                     # --- FIX ---
-                    val_str = "" if np.isnan(val) else f"{val:.6g}"
+                    val_str = "NaN" if np.isnan(val) else f"{val:.6g}"
                     out.append(f"{clean_line}{delim}{val_str}\n")
                     
             with open(target_file, "w", encoding='utf-8-sig') as f:
@@ -2572,11 +2555,17 @@ class BadgerLoopQtGraph(QMainWindow):
                         else:
                             val = np.nan 
                             
-                        parts = clean_line.split('\t')
+                        # Strip trailing empty tabs from original data to prevent parser crashes
+                        parts = [p for p in clean_line.split('\t') if p.strip() != ""]
                         
-                        # --- FIX ---
-                        val_str = "" if np.isnan(val) else f"{val:.6g}"
-                        parts.insert(target_col_idx, val_str) 
+                        # Use "NaN" instead of empty string so the strict float() parser survives
+                        val_str = "NaN" if np.isnan(val) else f"{val:.6g}"
+                        
+                        if target_col_idx < len(parts):
+                            parts.insert(target_col_idx, val_str) 
+                        else:
+                            parts.append(val_str)
+                            
                         out.append("\t".join(parts) + "\n")
                     else:
                         out.append(line) 
@@ -3492,26 +3481,39 @@ class BadgerLoopQtGraph(QMainWindow):
         if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
 
     def clear_fit(self):
-        if not getattr(self, 'active_fits', []): return
-        if len(self.active_fits) == 1:
-            fit = self.active_fits.pop()
-            self.plot_widget.removeItem(fit["plot_item"])
-            self.fit_legend.removeItem(fit["plot_item"])
+        # Route to the correct memory bank based on plot mode
+        active_list = getattr(self, 'active_3d_fits', []) if self.plot_mode == "3D" else getattr(self, 'active_fits', [])
+        if not active_list: return
+        
+        if len(active_list) == 1:
+            fit = active_list.pop()
+            if self.plot_mode == "3D":
+                self.gl_widget.removeItem(fit["plot_item"])
+            else:
+                self.plot_widget.removeItem(fit["plot_item"])
+                self.fit_legend.removeItem(fit["plot_item"])
         else:
-            dlg = MultiFitManagerDialog(self.active_fits, "Delete", self)
+            from ui.dialogs.fitting import MultiFitManagerDialog
+            dlg = MultiFitManagerDialog(active_list, "Delete", self)
             if dlg.exec() == QDialog.Accepted:
                 res_type, idx = dlg.get_selection()
                 if res_type == "all":
-                    for fit in self.active_fits:
+                    for fit in active_list:
+                        if self.plot_mode == "3D":
+                            self.gl_widget.removeItem(fit["plot_item"])
+                        else:
+                            self.plot_widget.removeItem(fit["plot_item"])
+                            self.fit_legend.removeItem(fit["plot_item"])
+                    active_list.clear()
+                else:
+                    fit = active_list.pop(idx)
+                    if self.plot_mode == "3D":
+                        self.gl_widget.removeItem(fit["plot_item"])
+                    else:
                         self.plot_widget.removeItem(fit["plot_item"])
                         self.fit_legend.removeItem(fit["plot_item"])
-                    self.active_fits.clear()
-                else:
-                    fit = self.active_fits.pop(idx)
-                    self.plot_widget.removeItem(fit["plot_item"])
-                    self.fit_legend.removeItem(fit["plot_item"])
-                    
-        if not self.active_fits:
+                        
+        if not active_list:
             self.save_function_btn.setVisible(False)
             if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(False)
             self.clear_fit_btn.setVisible(False)
@@ -3702,6 +3704,53 @@ class BadgerLoopQtGraph(QMainWindow):
         if not self.dataset: return
         win = FitDataToFunctionWindow(self.dataset, self)
         win.show()
+        
+    def open_fit_3d_surface_dialog(self):
+        if not self.dataset: return
+        from ui.dialogs.fitting_3d import Fit3DSurfaceDialog, execute_3d_surface_fit
+        
+        dlg = Fit3DSurfaceDialog(self)
+        if dlg.exec() != QDialog.Accepted: return
+        
+        func_type, param_config = dlg.get_result()
+        
+        # Extract raw physical data (ignoring NaNs)
+        data_cache = getattr(self, 'last_plotted_data', {})
+        if data_cache.get('mode') != '3D' or not data_cache.get('data'): return
+        
+        pts_list = []
+        import numpy as np
+        for item in data_cache['data']:
+            if str(item[0]) == "SURFACE":
+                grid_z = item[2]['z_2d'].flatten()
+                X, Y = np.meshgrid(item[2]['x_1d'], item[2]['y_1d'], indexing='ij')
+                pts_list.append(np.column_stack((X.flatten(), Y.flatten(), grid_z)))
+            else:
+                pts_list.append(item[2])
+                
+        all_pts = np.vstack(pts_list)
+        pts = all_pts[np.isfinite(all_pts).all(axis=1)]
+        
+        # Run the external modular engine for ALL function types
+        try:
+            final_params, param_names, model_callable = execute_3d_surface_fit(pts, func_type, param_config)
+        except Exception as e:
+            from ui.dialogs.data_mgmt import CopyableErrorDialog
+            CopyableErrorDialog("Fitting Error", "Optimization failed.", str(e), self).exec()
+            return
+
+        if not hasattr(self, 'active_3d_fits'): self.active_3d_fits = []
+        
+        self.active_3d_fits.append({
+            "name": f"Fit: {func_type}",
+            "type": func_type,
+            "params": final_params,
+            "param_names": param_names,
+            "callable": model_callable,
+            "param_config": param_config
+        })
+        
+        self.plot()
 
     def open_layout_dialog(self):
         self.layout_dialog.show()
@@ -3895,9 +3944,9 @@ class BadgerLoopQtGraph(QMainWindow):
         scale_lay.addWidget(QLabel("Z:")); scale_lay.addWidget(self.gl_scale_z)
         l5.addRow("Independent Axis Scale:", scale_lay)
 
-        self.gl_lighting_cb = QCheckBox("Enable Directional Lighting (Surface Plots)")
+        self.gl_lighting_cb = QCheckBox("Draw Surface Grid Lines (Wireframe)")
         self.gl_lighting_cb.setChecked(True)
-        l5.addRow("Shading:", self.gl_lighting_cb)
+        l5.addRow("Texture:", self.gl_lighting_cb)
 
         self.gl_stem_cb = QCheckBox("Draw Drop Lines to Floor (Scatter/Line Plots)")
         l5.addRow("Depth Cues:", self.gl_stem_cb)
@@ -4534,27 +4583,35 @@ class BadgerLoopQtGraph(QMainWindow):
             self.crosshair_label.hide()
 
     def show_function_details(self):
-        if not getattr(self, 'active_fits', []): return
+        active_list = getattr(self, 'active_3d_fits', []) if self.plot_mode == "3D" else getattr(self, 'active_fits', [])
+        if not active_list: return
         
-        if len(self.active_fits) == 1:
-            fit = self.active_fits[0]
+        from PyQt5.QtWidgets import QDialog, QMessageBox
+        
+        if len(active_list) == 1:
+            fit = active_list[0]
         else:
-            dlg = MultiFitManagerDialog(self.active_fits, "View", self)
+            from ui.dialogs.fitting import MultiFitManagerDialog
+            dlg = MultiFitManagerDialog(active_list, "View", self)
             if dlg.exec() == QDialog.Accepted:
                 _, idx = dlg.get_selection()
-                fit = self.active_fits[idx]
+                fit = active_list[idx]
             else:
                 return
 
-        ftype = fit["type"].capitalize()
+        raw_type = fit.get("type", "")
+        ftype = raw_type.capitalize()
         eq_str = fit.get("equation", "")
         coeff_str = ""
         math_style = "font-size: 20px; font-family: Cambria, serif; font-style: italic;"
+        
+        from core.constants import GREEK_MAP
 
+        # --- 2D Fits ---
         if ftype == "Polynomial":
-            coeff_str = "<br>".join([f"c<sub>{i}</sub> = {c:.6e}" for i, c in enumerate(fit["coeffs"])])
+            coeff_str = "<br>".join([f"c<sub>{i}</sub> = {c:.6e}" for i, c in enumerate(fit.get("coeffs", []))])
         elif ftype == "Logarithmic":
-            base = fit["base"]
+            base = fit.get("base", "e")
             eq_str = f"<span style='{math_style}'>y = a &middot; ln(x) + c</span>" if str(base).lower() == "e" else f"<span style='{math_style}'>y = a &middot; log<sub>{base}</sub>(x) + c</span>"
             coeff_str = f"a = {fit['params'][0]:.6e}<br>c = {fit['params'][1]:.6e}"
         elif ftype == "Exponential":
@@ -4570,6 +4627,20 @@ class BadgerLoopQtGraph(QMainWindow):
             display_eq = fit.get('html_equation', fit.get('equation', ''))
             eq_str = f"<span style='{math_style}'>y = {display_eq}</span>"
             coeff_str = "<br>".join([f"{GREEK_MAP.get(p, p)} = {v:.6e}" for p, v in zip(fit['param_names'], fit['params'])])
+        
+        # --- 3D Fits ---
+        elif raw_type == "Tilted Plane":
+            ftype = "3D Tilted Plane"
+            eq_str = f"<span style='{math_style}'>Z = A&middot;X + B&middot;Y + C</span>"
+            coeff_str = f"A = {fit['params'][0]:.6e}<br>B = {fit['params'][1]:.6e}<br>C = {fit['params'][2]:.6e}"
+        elif raw_type == "2D Paraboloid":
+            ftype = "2D Paraboloid"
+            eq_str = f"<span style='{math_style}'>Z = A&middot;X<sup>2</sup> + B&middot;Y<sup>2</sup> + C&middot;X + D&middot;Y + E</span>"
+            coeff_str = f"A = {fit['params'][0]:.6e}<br>B = {fit['params'][1]:.6e}<br>C = {fit['params'][2]:.6e}<br>D = {fit['params'][3]:.6e}<br>E = {fit['params'][4]:.6e}"
+        elif raw_type == "2D Gaussian":
+            ftype = "2D Gaussian (Tilted Baseline)"
+            eq_str = (f"<table style='{math_style}' border='0' cellspacing='0' cellpadding='2'><tr><td rowspan='2' valign='middle'>Z = A &middot; exp&nbsp;&nbsp;[ &minus; (</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;(X &minus; X<sub>0</sub>)<sup>2</sup>&nbsp;</td><td rowspan='2' valign='middle'>+</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;(Y &minus; Y<sub>0</sub>)<sup>2</sup>&nbsp;</td><td rowspan='2' valign='middle'>) ] + D&middot;X + E&middot;Y + C</td></tr><tr><td align='center'>2&sigma;<sub>x</sub><sup>2</sup></td><td align='center'>2&sigma;<sub>y</sub><sup>2</sup></td></tr></table>")
+            coeff_str = f"A = {fit['params'][0]:.6e}<br>X<sub>0</sub> = {fit['params'][1]:.6e}<br>Y<sub>0</sub> = {fit['params'][2]:.6e}<br>&sigma;<sub>x</sub> = {fit['params'][3]:.6e}<br>&sigma;<sub>y</sub> = {fit['params'][4]:.6e}<br>D = {fit['params'][5]:.6e}<br>E = {fit['params'][6]:.6e}<br>C = {fit['params'][7]:.6e}"
 
         msg = QMessageBox(self)
         msg.setWindowTitle(f"Function Details: {fit['name']}")
@@ -4580,6 +4651,8 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def set_plot_mode(self, mode):
         # --- NEW: UI CLEAN SLATE ON MODE SWITCH ---
+        # 0. Wipe 3D memory bank
+        if hasattr(self, 'active_3d_fits'): self.active_3d_fits.clear()
         # 1. Forcefully disable 3D Anchor if it exists
         if hasattr(self, 'crosshair_3d') and self.crosshair_3d.active:
             self.crosshair_3d.disable()
@@ -4663,6 +4736,10 @@ class BadgerLoopQtGraph(QMainWindow):
         
         if hasattr(self, '_update_uncert_visibility'):
             self._update_uncert_visibility()
+    
+        # --- NEW: Rebuild the Analysis and Fitting menus for this specific mode ---
+        self._update_context_menus()
+        # -------------------------------------------------------------------------
     
         if self.dataset:
             self.plot()
@@ -6556,11 +6633,18 @@ class BadgerLoopQtGraph(QMainWindow):
                 colors = cmap(z_norm).astype(np.float32) 
                 colors_flat = colors.reshape(-1, 4) 
                 
+                # --- FIX: Safe Wireframe Texture (No Shaders) ---
+                draw_grid = self.gl_lighting_cb.isChecked()
+                z_gl_safe = np.nan_to_num(z_scaled, nan=0.0)
+                
                 surface_item = gl.GLSurfacePlotItem(
-                    x=x_scaled, y=y_scaled, z=z_scaled, 
-                    colors=colors_flat, smooth=False, computeNormals=False
+                    x=x_scaled, y=y_scaled, z=z_gl_safe, 
+                    colors=colors_flat, 
+                    smooth=False, computeNormals=False,
+                    drawEdges=draw_grid, edgeColor=(0.0, 0.0, 0.0, 0.3) # Subtle dark net
                 )
                 self.gl_widget.addItem(surface_item)
+                # ------------------------------------------------
 
             else:
                 cmap = matplotlib.colormaps.get_cmap('jet') 
@@ -6609,7 +6693,50 @@ class BadgerLoopQtGraph(QMainWindow):
                         stem_item = gl.GLLinePlotItem(pos=stem_pts, color=(1, 1, 1, 0.4), width=1, antialias=True, mode='lines')
                         self.gl_widget.addItem(stem_item)
                     # ---------------------------------------
-        
+            # --- NEW: RENDER FITTED 3D SURFACES ---
+            if hasattr(self, 'active_3d_fits') and self.active_3d_fits:
+                x_grid = np.linspace(mins[0], maxs[0], 100)
+                y_grid = np.linspace(mins[1], maxs[1], 100)
+                
+                x_scaled = (x_grid - mins[0]) * scale_factors[0]
+                y_scaled = (y_grid - mins[1]) * scale_factors[1]
+                
+                X, Y = np.meshgrid(x_grid, y_grid, indexing='ij')
+                
+                for fit in self.active_3d_fits:
+                    Z = fit["callable"]((X, Y), *fit["params"])
+                    
+                    # --- FIX 1: Sanitize NaNs and Infs to prevent OpenGL crashes ---
+                    Z = np.nan_to_num(Z, nan=mins[2], posinf=maxs[2]*10, neginf=mins[2]*10)
+                    # ---------------------------------------------------------------
+                    
+                    Z_scaled = (Z - mins[2]) * scale_factors[2]
+                    
+                    x_gl = np.ascontiguousarray(x_scaled, dtype=np.float32)
+                    y_gl = np.ascontiguousarray(y_scaled, dtype=np.float32)
+                    z_gl = np.ascontiguousarray(Z_scaled, dtype=np.float32)
+                    
+                    # --- FIX: Bright White Grid for Fits (No Shaders) ---
+                    draw_grid = self.gl_lighting_cb.isChecked()
+                    
+                    fit_surface = gl.GLSurfacePlotItem(
+                        x=x_gl, y=y_gl, z=z_gl,
+                        color=(0.1, 0.6, 1.0, 0.45), 
+                        smooth=True, computeNormals=False, 
+                        drawEdges=draw_grid, edgeColor=(1.0, 1.0, 1.0, 0.8) # Bright white net
+                    )
+                    self.gl_widget.addItem(fit_surface)
+                    
+                    # Save a reference to the mesh so the "Clear Plot" button can delete it!
+                    fit["plot_item"] = fit_surface 
+                    # ----------------------------------------------------
+
+            # --- REVEAL THE UI BUTTONS IN 3D MODE ---
+            if hasattr(self, 'active_3d_fits') and self.active_3d_fits:
+                if hasattr(self, 'func_details_btn'): self.func_details_btn.setVisible(True)
+                if hasattr(self, 'clear_fit_btn'): self.clear_fit_btn.setVisible(True)
+            # ----------------------------------------
+
             self.gl_widget.opts['center'] = pg.Vector(5*sx, 5*sy, 5*sz) # Center camera on scaled data
             self.gl_widget.setCameraPosition(distance=25*max(sx, sy, sz), elevation=25, azimuth=45)
             self._init_3d_scene(bounds, (sx, sy, sz)) # Pass scales to the scene builder
@@ -7161,3 +7288,60 @@ class BadgerLoopQtGraph(QMainWindow):
             self.crosshair_3d.disable()
 
         self.plot()
+        
+    def _update_context_menus(self):
+        if not hasattr(self, 'analysis_menu') or not hasattr(self, 'fitting_menu'):
+            return
+
+        self.analysis_menu.clear()
+        self.fitting_menu.clear()
+
+        mode = getattr(self, 'plot_mode', '2D')
+
+        if mode == "2D":
+            # --- 2D ANALYSIS ---
+            self.analysis_menu.addAction("Data Slicer (Split Non-Monotonic)").triggered.connect(self.open_data_slicer)
+            self.analysis_menu.addAction("Signal Processing (Smooth / Calculus)").triggered.connect(self.open_signal_processing)
+            self.analysis_menu.addAction("Baseline Subtraction Tool").triggered.connect(self.open_baseline_subtraction)
+            self.analysis_menu.addAction("Phase Space Generator (x vs dx/dt)").triggered.connect(self.open_phase_space_dialog)
+            self.analysis_menu.addSeparator()
+            
+            fourier_menu = self.analysis_menu.addMenu("Fourier Analysis")
+            fourier_menu.addAction("Automated Peak Finder & iFFT Surgeon").triggered.connect(self.open_peak_finder)
+            fourier_menu.addAction("Spectrogram / STFT (Time-Frequency)").triggered.connect(self.open_spectrogram)
+            
+            area_menu = self.analysis_menu.addMenu("Area Calculators")
+            area_menu.addAction("Area Under Curve (Definite Integral)").triggered.connect(self.open_area_under_curve)
+            area_menu.addAction("Enclosed Loop Area Calculator").triggered.connect(self.open_loop_area_calculator)
+
+            # --- 2D FITTING ---
+            self.fitting_menu.addAction("Fit common function to data").triggered.connect(self.open_fit_function_dialog)
+            self.fitting_menu.addAction("Fit custom function to data").triggered.connect(self.open_custom_fit_dialog)
+            self.fitting_menu.addAction("Fit data to function").triggered.connect(self.open_fit_data_to_function)
+
+        elif mode == "3D":
+            # --- 3D ANALYSIS ---
+            self.analysis_menu.addAction("Cross-Sectional Data Slicer").triggered.connect(lambda: print("Launch 3D Slicer"))
+            self.analysis_menu.addAction("Volume Integration (Area Under Surface)").triggered.connect(lambda: print("Launch 3D Volume Tool"))
+            self.analysis_menu.addAction("3D Peak & Valley Detection").triggered.connect(lambda: print("Launch 3D Peak Tool"))
+            self.analysis_menu.addAction("Isoline / Contour Extraction").triggered.connect(lambda: print("Launch 3D Contour Tool"))
+
+            # --- 3D FITTING ---
+            self.fitting_menu.addAction("Fit 3D Plane / Surface to data").triggered.connect(self.open_fit_3d_surface_dialog)
+            self.fitting_menu.addAction("Fit Custom 3D Equation (Z = f(X,Y))").triggered.connect(lambda: print("Launch 3D Custom Fit"))
+
+        elif mode == "Heatmap":
+            # --- HEATMAP ANALYSIS ---
+            self.analysis_menu.addAction("2D Peak & Valley Detection").triggered.connect(lambda: print("Launch Heatmap Peak Tool"))
+            self.analysis_menu.addAction("Cross-Sectional Profile Extraction").triggered.connect(lambda: print("Launch Profile Extractor"))
+
+            # --- HEATMAP FITTING ---
+            self.fitting_menu.addAction("Fit 2D Gaussian (Beam Profile)").triggered.connect(lambda: print("Launch Heatmap Gaussian Fit"))
+
+        elif mode == "Histogram":
+            # --- HISTOGRAM ANALYSIS ---
+            self.analysis_menu.addAction("Calculate Distribution Statistics").triggered.connect(lambda: print("Launch Distribution Stats"))
+
+            # --- HISTOGRAM FITTING ---
+            self.fitting_menu.addAction("Fit Probability Density Function (PDF)").triggered.connect(lambda: print("Launch PDF Fit"))
+            self.fitting_menu.addAction("Fit Gaussian / Normal Distribution").triggered.connect(lambda: print("Launch Gauss Fit"))
