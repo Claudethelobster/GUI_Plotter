@@ -46,7 +46,7 @@ class Crosshair3DManager(QObject):
         
         combined_md = gl.MeshData(vertexes=combined_verts, faces=combined_faces)
         
-        self.marker = gl.GLMeshItem(meshdata=combined_md, smooth=True, color=(1.0, 0.2, 0.2, 0.9), shader='shaded')
+        self.marker = gl.GLMeshItem(meshdata=combined_md, smooth=False, computeNormals=False, color=(1.0, 0.2, 0.2, 0.9), shader=None)
         self.marker.hide()
             
         # 2. Build the Floating HUD
