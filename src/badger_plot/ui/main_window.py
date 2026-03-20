@@ -3851,6 +3851,9 @@ class BadgerLoopQtGraph(QMainWindow):
         self.gl_surface_cb.stateChanged.connect(self._update_graphtype_ui)
         self.gl_surface_cb.stateChanged.connect(self.plot)
         l5.addRow("Plot Style:", self.gl_surface_cb)
+        
+        self.gl_surface_snap_cb = QCheckBox("Snap to raw data points (Surface Mode)")
+        l5.addRow("", self.gl_surface_snap_cb)
         # -----------------------------
         
         from PyQt5.QtWidgets import QDoubleSpinBox
@@ -4175,6 +4178,14 @@ class BadgerLoopQtGraph(QMainWindow):
         self.heatmap_cmap.currentTextChanged.connect(self.plot)
         controls.addWidget(self.heatmap_cmap)
         
+        # --- NEW: MAIN UI SURFACE TOGGLE ---
+        self.gl_surface_main_btn = QPushButton("○ Surface View (Off)")
+        self.gl_surface_main_btn.setCheckable(True)
+        self.gl_surface_main_btn.setVisible(False) # Hidden by default
+        self.gl_surface_main_btn.clicked.connect(lambda checked: self._toggle_surface_mode(checked))
+        controls.addWidget(self.gl_surface_main_btn)
+        # -----------------------------------
+        
         self.snap_toggle_btn = QPushButton("✔ Snap Crosshair to Point")
         self.snap_toggle_btn.setCheckable(True)
         self.snap_toggle_btn.setChecked(True)
@@ -4339,15 +4350,47 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def toggle_crosshairs(self):
         self.crosshairs_enabled = not getattr(self, 'crosshairs_enabled', False)
-        if not self.crosshairs_enabled:
+        
+        if self.plot_mode == "3D":
+            if not hasattr(self, 'crosshair_3d'):
+                from core.analysis_3d import Crosshair3DManager
+                self.crosshair_3d = Crosshair3DManager(self)
+            self.crosshair_3d.toggle()
+            
+            # Hide 2D items
             self.vLine.hide()
             self.hLine.hide()
             self.crosshair_label.hide()
-            self.snap_toggle_btn.setVisible(False)
+            
+            # Sync the UI button using the 3D manager
+            self.snap_toggle_btn.setVisible(self.crosshairs_enabled)
+            if self.crosshairs_enabled:
+                self.crosshair_3d.sync_button_ui()
+                
         else:
-            self.snap_toggle_btn.setVisible(True)
+            # Disable 3D if it was active
+            if hasattr(self, 'crosshair_3d') and self.crosshair_3d.active:
+                self.crosshair_3d.disable()
+                
+            # Enable 2D
+            if not self.crosshairs_enabled:
+                self.vLine.hide()
+                self.hLine.hide()
+                self.crosshair_label.hide()
+                self.snap_toggle_btn.setVisible(False)
+            else:
+                self.snap_toggle_btn.setVisible(True)
+                self._update_snap_btn_ui()
             
     def _update_snap_btn_ui(self):
+        # Route 3D logic
+        if getattr(self, 'plot_mode', '2D') == "3D":
+            if hasattr(self, 'crosshair_3d') and self.crosshair_3d.active:
+                is_locked = not self.snap_toggle_btn.isChecked()
+                self.crosshair_3d.set_locked(is_locked)
+            return
+
+        # Standard 2D logic
         if self.snap_toggle_btn.isChecked():
             self.snap_toggle_btn.setText("✔ Snap Crosshair to Point")
             self.snap_toggle_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; border: 2px solid {theme.success_border}; padding: 6px; background-color: {theme.bg};")
@@ -4508,10 +4551,30 @@ class BadgerLoopQtGraph(QMainWindow):
         msg.exec()
 
     def set_plot_mode(self, mode):
-        # --- NEW: Protect the STFT flag ---
+        # --- NEW: UI CLEAN SLATE ON MODE SWITCH ---
+        # 1. Forcefully disable 3D Anchor if it exists
+        if hasattr(self, 'crosshair_3d') and self.crosshair_3d.active:
+            self.crosshair_3d.disable()
+            
+        # 2. Forcefully disable 2D Crosshairs
+        self.crosshairs_enabled = False
+        if hasattr(self, 'vLine'): self.vLine.hide()
+        if hasattr(self, 'hLine'): self.hLine.hide()
+        if hasattr(self, 'crosshair_label'): self.crosshair_label.hide()
+        
+        # 3. Reset the shared toggle button to a neutral state
+        if hasattr(self, 'snap_toggle_btn'):
+            self.snap_toggle_btn.blockSignals(True)
+            self.snap_toggle_btn.setChecked(False)
+            self.snap_toggle_btn.setVisible(False)
+            self.snap_toggle_btn.setText("✔ Snap Crosshair to Point") # Reset 2D text
+            self.snap_toggle_btn.setStyleSheet(f"color: {theme.fg}; padding: 6px; background-color: {theme.bg};")
+            self.snap_toggle_btn.blockSignals(False)
+        # ------------------------------------------
+        
+        # Protect the STFT flag
         if not getattr(self, '_ignore_mode_clear', False):
             self.stft_mode_active = False
-        # ----------------------------------
         self._is_plotting = False
         if mode == "3D" and not OPENGL_AVAILABLE:
             QMessageBox.warning(self, "3D Not Available", "3D plotting requires OpenGL support.\n\nInstall pyqtgraph with OpenGL enabled.\n\nThis can be done with: pip install PyOpenGL PyOpenGL_accelerate")
@@ -4524,6 +4587,13 @@ class BadgerLoopQtGraph(QMainWindow):
         self.heatmap_cmap.setVisible(is_heatmap)
         self.heatmap_cmap_label.setVisible(is_heatmap)
         self.heatmap_item.setVisible(is_heatmap)
+        
+        # --- NEW: SHOW SURFACE BUTTON IN 3D MODE ---
+        if hasattr(self, 'gl_surface_main_btn'):
+            self.gl_surface_main_btn.setVisible(mode == "3D")
+            if mode == "3D":
+                self._toggle_surface_mode(self.gl_surface_cb.isChecked()) # Sync styling on load
+        # -------------------------------------------
         
         # --- NEW: UI TOGGLES FOR HISTOGRAM ---
         is_hist = (mode == "Histogram")
@@ -4936,6 +5006,7 @@ class BadgerLoopQtGraph(QMainWindow):
         self.aspect_h_edit.setText(self.settings.value("aspect_h", "9"))
         self.aspect_combo.setCurrentText(self.settings.value("aspect_mode", "Free"))
         self._update_aspect_ui(self.aspect_combo.currentText())
+        self.gl_surface_snap_cb.setChecked(self.settings.value("gl_surface_snap", False, bool))
         
         show_z = (self.plot_mode in ["3D", "Heatmap"])
         self.zcol.setVisible(show_z)
@@ -5092,6 +5163,7 @@ class BadgerLoopQtGraph(QMainWindow):
         self.settings.setValue("aspect_mode", self.aspect_combo.currentText())
         self.settings.setValue("aspect_w", self.aspect_w_edit.text())
         self.settings.setValue("aspect_h", self.aspect_h_edit.text())
+        self.settings.setValue("gl_surface_snap", self.gl_surface_snap_cb.isChecked())
         
         if hasattr(self, 'snap_toggle_btn'):
             self.settings.setValue("crosshair_snap", self.snap_toggle_btn.isChecked())
@@ -5708,6 +5780,12 @@ class BadgerLoopQtGraph(QMainWindow):
         if not self.dataset: return
         if getattr(self, '_is_plotting', False) or (hasattr(self, 'plot_thread') and self.plot_thread.isRunning()): return 
         self._is_plotting = True
+        
+        # --- NEW: CONTEXT SENSITIVITY ---
+        # Turn off the 3D crosshair anytime the plot is refreshed/redrawn
+        if hasattr(self, 'crosshair_3d'):
+            self.crosshair_3d.disable()
+        # --------------------------------
         
         self._clear_final_loops()
         # --- NEW ---
@@ -6404,10 +6482,13 @@ class BadgerLoopQtGraph(QMainWindow):
             if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
             if not OPENGL_AVAILABLE: return
             self.gl_widget.clear() 
-            self._apply_canvas_settings() # <--- Applies the dynamic background
+            self._apply_canvas_settings()
             
             if not all_pts_raw: return
-            self.last_plotted_data = {'mode': '3D', 'data': all_pts_raw}
+            
+            # --- FIX: Save the bounds into the dict so the Crosshair Manager can read them! ---
+            self.last_plotted_data = {'mode': '3D', 'data': all_pts_raw, 'bounds': bounds}
+            # ----------------------------------------------------------------------------------
                 
             mins, maxs = bounds
             spans = maxs - mins
@@ -7025,3 +7106,25 @@ class BadgerLoopQtGraph(QMainWindow):
             
         for item, _ in getattr(self, 'auc_items', []):
             item.setVisible(is_checked)
+    
+    def _toggle_surface_mode(self, checked):
+        # Sync the hidden settings checkbox so preferences still save correctly
+        if hasattr(self, 'gl_surface_cb'):
+            self.gl_surface_cb.blockSignals(True)
+            self.gl_surface_cb.setChecked(checked)
+            self.gl_surface_cb.blockSignals(False)
+
+        # Update the UI button styling
+        if checked:
+            self.gl_surface_main_btn.setText("✔ Surface View (Linear Mesh)")
+            self.gl_surface_main_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; border: 2px solid {theme.success_border}; padding: 6px; background-color: {theme.bg};")
+        else:
+            self.gl_surface_main_btn.setText("○ Surface View (Off)")
+            # --- FIX: Changed theme.text to theme.fg ---
+            self.gl_surface_main_btn.setStyleSheet(f"color: {theme.fg}; border: 1px solid {theme.border}; padding: 6px; background-color: {theme.bg};")
+
+        # Context requirement: Turn off crosshair when surface mode changes
+        if hasattr(self, 'crosshair_3d'):
+            self.crosshair_3d.disable()
+
+        self.plot()
