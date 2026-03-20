@@ -473,26 +473,37 @@ class CustomFitDialog(QDialog):
         sort_idx = np.argsort(x_full)
         x_sorted = x_full[sort_idx]
         
-        # --- SAFE DICT ---
+        # --- FIX: Generate a high-resolution array for a smooth live preview ---
+        from scipy.interpolate import make_interp_spline
+        x_unique, unique_idx = np.unique(x_sorted, return_index=True)
+        
+        if len(x_unique) < 2: return
+        xfit = np.linspace(x_unique[0], x_unique[-1], 500)
+        
         safe_dict = aux_dict if aux_dict is not None else {}
-        sorted_aux = {}
+        smooth_aux = {}
         for c in self.used_cols:
             arr = safe_dict.get(c, np.zeros_like(x_full))
-            sorted_aux[c] = arr[sort_idx]
-        # -----------------
+            y_unq = arr[sort_idx][unique_idx]
+            if len(x_unique) > 3:
+                spline = make_interp_spline(x_unique, y_unq, k=3)
+                smooth_aux[c] = spline(xfit)
+            else:
+                smooth_aux[c] = np.interp(xfit, x_unique, y_unq)
+        # -----------------------------------------------------------------------
         
         def norm_func(v):
             arr = np.asarray(v, dtype=np.float64)
             m = np.max(arr)
             return arr / m if m != 0 else arr
             
-        env = {"np": np, "e": np.e, "pi": np.pi, "x": x_sorted, "data_dict": sorted_aux, "norm": norm_func}
+        env = {"np": np, "e": np.e, "pi": np.pi, "x": xfit, "data_dict": smooth_aux, "norm": norm_func}
         for i, p in enumerate(self.parameters): env[p] = param_vals[i]
         
         try:
             yfit = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
             if yfit.ndim == 0:
-                yfit = np.full_like(x_sorted, float(yfit))
+                yfit = np.full_like(xfit, float(yfit))
             
             import pyqtgraph as pg
             from PyQt5.QtCore import Qt
@@ -500,7 +511,7 @@ class CustomFitDialog(QDialog):
                 self.parent_gui.phantom_curve = pg.PlotCurveItem(pen=pg.mkPen("m", width=3, style=Qt.DotLine))
                 self.parent_gui.plot_widget.addItem(self.parent_gui.phantom_curve)
             
-            self.parent_gui.phantom_curve.setData(x_sorted, yfit)
+            self.parent_gui.phantom_curve.setData(xfit, yfit)
             self.parent_gui.phantom_curve.setVisible(True)
         except Exception as e:
             pass # Allows user to keep typing without throwing hard UI errors
