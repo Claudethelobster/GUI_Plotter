@@ -306,7 +306,11 @@ class PlotWorkerThread(QThread):
                             return 
                         raise e
                         
-                    surface_dict = {"x_1d": x_1d, "y_1d": y_1d, "z_2d": grid_z}
+                    # --- FIX: INCLUDE RAW POINTS FOR THE CROSSHAIR TO SNAP TO ---    
+                    surface_dict = {
+                        "x_1d": x_1d, "y_1d": y_1d, "z_2d": grid_z, 
+                        "raw_pts": np.column_stack((x_arrs, y_arrs, z_arrs))
+                    }
                     all_pts_raw.append(("SURFACE", 0, surface_dict))
                     
                 else:
