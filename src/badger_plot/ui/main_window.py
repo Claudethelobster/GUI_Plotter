@@ -381,6 +381,11 @@ class BadgerLoopQtGraph(QMainWindow):
             OPENGL_AVAILABLE = False
         # --------------------------------
         
+        # --- FIX: INITIALISE THE THEME ENGINE BEFORE BUILDING THE UI ---
+        is_dark = self.settings.value("dark_mode", False, bool)
+        theme.update(is_dark)
+        # ---------------------------------------------------------------
+        
         self.dataset = None
         self.last_file = None
         self.legend_visible = True
@@ -609,16 +614,16 @@ class BadgerLoopQtGraph(QMainWindow):
             btn_axis.setToolTip("Toggle Left / Right Y-Axis")
             
             if is_visible:
-                btn_eye.setStyleSheet("border: none; font-size: 16px; color: #333; text-decoration: none;")
-                label.setStyleSheet("color: black; text-decoration: none;")
+                btn_eye.setStyleSheet(f"border: none; font-size: 16px; color: {theme.fg}; text-decoration: none;")
+                label.setStyleSheet(f"color: {theme.fg}; text-decoration: none;")
             else:
                 btn_eye.setStyleSheet("border: none; font-size: 16px; color: #aaa; text-decoration: line-through;")
                 label.setStyleSheet("color: #aaa; text-decoration: line-through;")
                 
             if axis_side == 'L':
-                btn_axis.setStyleSheet("border: 1px solid #aaa; font-weight: bold; color: #0055ff; background: #e6f0ff;")
+                btn_axis.setStyleSheet(f"border: 1px solid {theme.border}; font-weight: bold; color: {theme.primary_text}; background: {theme.primary_bg};")
             else:
-                btn_axis.setStyleSheet("border: 1px solid #aaa; font-weight: bold; color: #d90000; background: #ffe6e6;")
+                btn_axis.setStyleSheet(f"border: 1px solid {theme.border}; font-weight: bold; color: {theme.danger_text}; background: {theme.danger_bg};")
                 
             layout.addWidget(btn_eye)
             layout.addWidget(btn_settings)
@@ -645,13 +650,16 @@ class BadgerLoopQtGraph(QMainWindow):
         
         widget = self.series_list.itemWidget(item)
         btns = widget.findChildren(QPushButton)
-        if len(btns) > 1:
-            btn_axis = btns[1]
+        
+        if len(btns) > 2:
+            btn_axis = btns[2] 
             btn_axis.setText(pair['axis'])
             if pair['axis'] == 'L':
-                btn_axis.setStyleSheet("border: 1px solid #aaa; font-weight: bold; color: #0055ff; background: #e6f0ff;")
+                # --- FIX: USE THEME ENGINE VARIABLES ---
+                btn_axis.setStyleSheet(f"border: 1px solid {theme.border}; font-weight: bold; color: {theme.primary_text}; background: {theme.primary_bg};")
             else:
-                btn_axis.setStyleSheet("border: 1px solid #aaa; font-weight: bold; color: #d90000; background: #ffe6e6;")
+                btn_axis.setStyleSheet(f"border: 1px solid {theme.border}; font-weight: bold; color: {theme.danger_text}; background: {theme.danger_bg};")
+                # ---------------------------------------
                 
         self.plot()
         self.update_active_layer()
@@ -669,8 +677,8 @@ class BadgerLoopQtGraph(QMainWindow):
         label = widget.findChild(QLabel)
         
         if is_visible:
-            btn.setStyleSheet("border: none; font-size: 16px; color: #333; text-decoration: none;")
-            label.setStyleSheet("color: black; text-decoration: none;")
+            btn.setStyleSheet(f"border: none; font-size: 16px; color: {theme.fg}; text-decoration: none;")
+            label.setStyleSheet(f"color: {theme.fg}; text-decoration: none;")
         else:
             btn.setStyleSheet("border: none; font-size: 16px; color: #aaa; text-decoration: line-through;")
             label.setStyleSheet("color: #aaa; text-decoration: line-through;")
@@ -3977,9 +3985,18 @@ class BadgerLoopQtGraph(QMainWindow):
     def _apply_canvas_settings(self):
         # 1. Background
         bg = self.bg_color_combo.currentText()
-        if bg == "White": self.plot_widget.setBackground("w")
-        elif bg == "Black": self.plot_widget.setBackground("k")
-        else: self.plot_widget.setBackground(None) 
+        if bg == "White": 
+            self.plot_widget.setBackground("w")
+            if getattr(self, 'gl_widget', None): self.gl_widget.setBackgroundColor('w')
+        elif bg == "Black": 
+            self.plot_widget.setBackground("k")
+            if getattr(self, 'gl_widget', None): self.gl_widget.setBackgroundColor('k')
+        else: 
+            self.plot_widget.setBackground(None) 
+            # GLViewWidget doesn't handle pure transparency well over UI elements, so fallback to theme background
+            if getattr(self, 'gl_widget', None): 
+                theme_bg = '#353535' if self.settings.value("dark_mode", False, bool) else '#f5f5f5'
+                self.gl_widget.setBackgroundColor(theme_bg)
         
         # 2. Grid
         try: alpha = float(self.grid_alpha_edit.text())
@@ -4783,31 +4800,43 @@ class BadgerLoopQtGraph(QMainWindow):
 
         font = pg.QtGui.QFont(font_family, tick_size)
         label_font = pg.QtGui.QFont(font_family, label_size, pg.QtGui.QFont.Bold)
-        text_color = (200, 200, 200, 255) 
+        
+        # --- NEW: DYNAMIC 3D TEXT COLOURS ---
+        bg_val = self.bg_color_combo.currentText()
+        is_dark_theme = self.settings.value("dark_mode", False, bool)
+        
+        if bg_val == "White" or (bg_val == "Transparent" and not is_dark_theme):
+            text_color = (50, 50, 50, 255)
+            label_color = (0, 0, 0, 255)
+            gz.setColor((150, 150, 150, 100)) # Darker, more transparent grid for white background
+        else:
+            text_color = (200, 200, 200, 255)
+            label_color = (255, 255, 255, 255)
+            gz.setColor((150, 150, 150, 255))
+        # ------------------------------------
 
         def add_tick_line(p1, p2):
             self.gl_widget.addItem(gl.GLLinePlotItem(pos=np.array([p1, p2]), color=(0.7, 0.7, 0.7, 1), width=2))
 
         tick_positions = np.linspace(0, 10, 5)
 
-        # --- NEW: DRAW HTML WITH GLRichTextItem ---
         for pos in tick_positions:
             val = mins[0] + (pos / 10.0) * spans[0]
             add_tick_line([pos*sx, 0, -0.1], [pos*sx, -0.3, -0.1])
             self.gl_widget.addItem(GLRichTextItem(pos=[pos*sx, -0.5, -0.1], text=format_val_3d(val, xlog, xbase), font=font, color=text_color))
-        self.gl_widget.addItem(GLRichTextItem(pos=[5*sx, -1.8, -0.1], text=x_name, font=label_font, color=(255, 255, 255, 255)))
+        self.gl_widget.addItem(GLRichTextItem(pos=[5*sx, -1.8, -0.1], text=x_name, font=label_font, color=label_color))
 
         for pos in tick_positions:
             val = mins[1] + (pos / 10.0) * spans[1]
             add_tick_line([0, pos*sy, -0.1], [-0.3, pos*sy, -0.1])
             self.gl_widget.addItem(GLRichTextItem(pos=[-0.5, pos*sy, -0.1], text=format_val_3d(val, ylog, ybase), font=font, color=text_color))
-        self.gl_widget.addItem(GLRichTextItem(pos=[-2.2, 5*sy, -0.1], text=y_name, font=label_font, color=(255, 255, 255, 255)))
+        self.gl_widget.addItem(GLRichTextItem(pos=[-2.2, 5*sy, -0.1], text=y_name, font=label_font, color=label_color))
 
         for pos in tick_positions[1:]: 
             val = mins[2] + (pos / 10.0) * spans[2]
             add_tick_line([0, 0, pos*sz], [-0.3, 0, pos*sz])
             self.gl_widget.addItem(GLRichTextItem(pos=[-0.5, 0, pos*sz], text=format_val_3d(val, zlog, zbase), font=font, color=text_color))
-        self.gl_widget.addItem(GLRichTextItem(pos=[-1.5, 0, 5*sz], text=z_name, font=label_font, color=(255, 255, 255, 255)))
+        self.gl_widget.addItem(GLRichTextItem(pos=[-1.5, 0, 5*sz], text=z_name, font=label_font, color=label_color))
 
     def toggle_legend(self):
         self.legend_visible = not getattr(self, 'legend_visible', True)
@@ -4842,6 +4871,15 @@ class BadgerLoopQtGraph(QMainWindow):
         
         self.legend_visible = self.settings.value("legend", True, bool)
         self.fit_legend.setVisible(self.legend_visible)
+        
+        # --- FIX: SYNC THE LEGEND BUTTON STATE & COLOUR ON BOOT ---
+        if hasattr(self, 'toggle_legend_btn'):
+            self.toggle_legend_btn.setChecked(self.legend_visible)
+            if self.legend_visible:
+                self.toggle_legend_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; border-radius: 4px; padding: 6px; color: {theme.primary_text};")
+            else:
+                self.toggle_legend_btn.setStyleSheet(f"background-color: {theme.bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px; color: {theme.fg};")
+        # ----------------------------------------------------------
         saved_aliases_str = self.settings.value("legend_aliases", "")
         if saved_aliases_str:
             try: self.legend_aliases = json.loads(saved_aliases_str)
@@ -5076,6 +5114,8 @@ class BadgerLoopQtGraph(QMainWindow):
         self.settings.setValue("graphtype", self.graphtype.currentText())
         self.settings.setValue("plot_mode", self.plot_mode)
         self.settings.setValue("heatmap_cmap", self.heatmap_cmap.currentText())
+        self.settings.setValue("bg_color", self.bg_color_combo.currentText())
+        self.settings.setValue("grid_alpha", self.grid_alpha_edit.text())
     
         super().closeEvent(e)
 
@@ -6364,7 +6404,8 @@ class BadgerLoopQtGraph(QMainWindow):
             if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
             if not OPENGL_AVAILABLE: return
             self.gl_widget.clear() 
-            self.gl_widget.setBackgroundColor('k')
+            self._apply_canvas_settings() # <--- Applies the dynamic background
+            
             if not all_pts_raw: return
             self.last_plotted_data = {'mode': '3D', 'data': all_pts_raw}
                 
