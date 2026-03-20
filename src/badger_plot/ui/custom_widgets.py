@@ -60,9 +60,21 @@ class CustomAxisItem(pg.AxisItem):
             return super().tickValues(minVal, maxVal, size)
 
     def tickStrings(self, values, scale, spacing):
-        if not self.custom_log_mode:
-            return super().tickStrings(values, scale, spacing)
+        # 1. Linear Mode: Hardcoded formatter to prevent cross-device DPI scaling issues
+        if not getattr(self, 'custom_log_mode', False):
+            strings = []
+            for v in values:
+                if v == 0:
+                    strings.append("0")
+                elif abs(v) < 1e-4 or abs(v) >= 1e4:
+                    # Scientific notation for very large/small numbers
+                    strings.append(f"{v:.2e}")
+                else:
+                    # Standard decimals (e.g., 0.001) up to 4 significant figures
+                    strings.append(f"{v:.4g}")
+            return strings
         
+        # 2. Log Mode: Your existing custom superscript formatting
         superscripts = {'0':'⁰', '1':'¹', '2':'²', '3':'³', '4':'⁴', '5':'⁵', '6':'⁶', '7':'⁷', '8':'⁸', '9':'⁹', '-':'⁻', '.':'⋅'}
         
         strings = []
