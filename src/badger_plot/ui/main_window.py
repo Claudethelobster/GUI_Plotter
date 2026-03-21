@@ -3712,9 +3712,8 @@ class BadgerLoopQtGraph(QMainWindow):
         dlg = Fit3DSurfaceDialog(self)
         if dlg.exec() != QDialog.Accepted: return
         
-        func_type, param_config = dlg.get_result()
+        func_type, param_config, degree, eq_str = dlg.get_result()
         
-        # Extract raw physical data (ignoring NaNs)
         data_cache = getattr(self, 'last_plotted_data', {})
         if data_cache.get('mode') != '3D' or not data_cache.get('data'): return
         
@@ -3731,9 +3730,8 @@ class BadgerLoopQtGraph(QMainWindow):
         all_pts = np.vstack(pts_list)
         pts = all_pts[np.isfinite(all_pts).all(axis=1)]
         
-        # Run the external modular engine for ALL function types
         try:
-            final_params, param_names, model_callable = execute_3d_surface_fit(pts, func_type, param_config)
+            final_params, param_names, model_callable = execute_3d_surface_fit(pts, func_type, param_config, degree)
         except Exception as e:
             from ui.dialogs.data_mgmt import CopyableErrorDialog
             CopyableErrorDialog("Fitting Error", "Optimization failed.", str(e), self).exec()
@@ -3747,7 +3745,9 @@ class BadgerLoopQtGraph(QMainWindow):
             "params": final_params,
             "param_names": param_names,
             "callable": model_callable,
-            "param_config": param_config
+            "param_config": param_config,
+            "degree": degree,
+            "equation": eq_str
         })
         
         self.plot()
@@ -4629,19 +4629,22 @@ class BadgerLoopQtGraph(QMainWindow):
             coeff_str = "<br>".join([f"{GREEK_MAP.get(p, p)} = {v:.6e}" for p, v in zip(fit['param_names'], fit['params'])])
         
         # --- 3D Fits ---
-        elif raw_type == "Tilted Plane":
-            ftype = "3D Tilted Plane"
-            eq_str = f"<span style='{math_style}'>Z = A&middot;X + B&middot;Y + C</span>"
-            coeff_str = f"A = {fit['params'][0]:.6e}<br>B = {fit['params'][1]:.6e}<br>C = {fit['params'][2]:.6e}"
-        elif raw_type == "2D Paraboloid":
-            ftype = "2D Paraboloid"
-            eq_str = f"<span style='{math_style}'>Z = A&middot;X<sup>2</sup> + B&middot;Y<sup>2</sup> + C&middot;X + D&middot;Y + E</span>"
-            coeff_str = f"A = {fit['params'][0]:.6e}<br>B = {fit['params'][1]:.6e}<br>C = {fit['params'][2]:.6e}<br>D = {fit['params'][3]:.6e}<br>E = {fit['params'][4]:.6e}"
+        elif raw_type == "2D Polynomial":
+            ftype = f"2D Polynomial (Degree {fit.get('degree', 1)})"
+            eq_str = fit.get("equation", "")
+            coeff_str = "<br>".join([f"C<sub>{i}</sub> = {c:.6e}" for i, c in enumerate(fit['params'])])
         elif raw_type == "2D Gaussian":
             ftype = "2D Gaussian (Tilted Baseline)"
             eq_str = (f"<table style='{math_style}' border='0' cellspacing='0' cellpadding='2'><tr><td rowspan='2' valign='middle'>Z = A &middot; exp&nbsp;&nbsp;[ &minus; (</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;(X &minus; X<sub>0</sub>)<sup>2</sup>&nbsp;</td><td rowspan='2' valign='middle'>+</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;(Y &minus; Y<sub>0</sub>)<sup>2</sup>&nbsp;</td><td rowspan='2' valign='middle'>) ] + D&middot;X + E&middot;Y + C</td></tr><tr><td align='center'>2&sigma;<sub>x</sub><sup>2</sup></td><td align='center'>2&sigma;<sub>y</sub><sup>2</sup></td></tr></table>")
             coeff_str = f"A = {fit['params'][0]:.6e}<br>X<sub>0</sub> = {fit['params'][1]:.6e}<br>Y<sub>0</sub> = {fit['params'][2]:.6e}<br>&sigma;<sub>x</sub> = {fit['params'][3]:.6e}<br>&sigma;<sub>y</sub> = {fit['params'][4]:.6e}<br>D = {fit['params'][5]:.6e}<br>E = {fit['params'][6]:.6e}<br>C = {fit['params'][7]:.6e}"
-
+        elif raw_type == "2D Lorentzian":
+            ftype = "2D Lorentzian (Tilted Baseline)"
+            eq_str = (f"<table style='{math_style}' border='0' cellspacing='0' cellpadding='2'><tr><td rowspan='2' valign='middle'>Z = </td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;A&nbsp;</td><td rowspan='2' valign='middle'> + D&middot;X + E&middot;Y + C</td></tr><tr><td align='center'><table style='{math_style}' border='0' cellspacing='0' cellpadding='0'><tr><td rowspan='2' valign='middle'>1 + &nbsp;[</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;X &minus; X<sub>0</sub>&nbsp;</td><td rowspan='2' valign='middle'>]<sup>2</sup> + [</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;Y &minus; Y<sub>0</sub>&nbsp;</td><td rowspan='2' valign='middle'>]<sup>2</sup></td></tr><tr><td align='center'>&gamma;<sub>x</sub></td><td align='center'>&gamma;<sub>y</sub></td></tr></table></td></tr></table>")
+            coeff_str = f"A = {fit['params'][0]:.6e}<br>X<sub>0</sub> = {fit['params'][1]:.6e}<br>Y<sub>0</sub> = {fit['params'][2]:.6e}<br>&gamma;<sub>x</sub> = {fit['params'][3]:.6e}<br>&gamma;<sub>y</sub> = {fit['params'][4]:.6e}<br>D = {fit['params'][5]:.6e}<br>E = {fit['params'][6]:.6e}<br>C = {fit['params'][7]:.6e}" 
+        elif raw_type == "2D Harmonic (Ripple)":
+            ftype = "2D Harmonic (Sine Wave)"
+            eq_str = f"<span style='{math_style}'>Z = A &middot; sin(&omega;<sub>x</sub>X + &phi;<sub>x</sub>) &middot; sin(&omega;<sub>y</sub>Y + &phi;<sub>y</sub>) + C</span>"
+            coeff_str = f"A = {fit['params'][0]:.6e}<br>&omega;<sub>x</sub> = {fit['params'][1]:.6e}<br>&phi;<sub>x</sub> = {fit['params'][2]:.6e}<br>&omega;<sub>y</sub> = {fit['params'][3]:.6e}<br>&phi;<sub>y</sub> = {fit['params'][4]:.6e}<br>C = {fit['params'][5]:.6e}"
         msg = QMessageBox(self)
         msg.setWindowTitle(f"Function Details: {fit['name']}")
         msg.setText(f"<b style='font-size: 16px;'>Fit Type:</b> <span style='font-size: 16px;'>{ftype}</span>")
