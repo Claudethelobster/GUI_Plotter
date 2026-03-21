@@ -14,18 +14,20 @@ class Fit3DSurfaceDialog(QDialog):
         super().__init__(parent_gui) 
         
         self.setWindowTitle("Fit 3D Surface to Data")
-        self.setMinimumWidth(500)
-        self.setMinimumHeight(450)
+        self.setMinimumWidth(550)
+        self.setMinimumHeight(500)
         self.parent_gui = parent_gui 
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
         self.func_combo = QComboBox()
-        self.func_combo.addItems([
-            "Tilted Plane", "2D Paraboloid", "2D Gaussian"
-        ])
+        self.func_combo.addItems(["2D Polynomial", "2D Gaussian", "2D Lorentzian", "2D Harmonic (Ripple)"])
         form.addRow("Surface type:", self.func_combo)
+        
+        self.degree_edit = QLineEdit("1")
+        form.addRow("Polynomial degree:", self.degree_edit)
+        
         layout.addLayout(form)
         
         self.eq_label = QLabel()
@@ -62,26 +64,45 @@ class Fit3DSurfaceDialog(QDialog):
         layout.addLayout(btn_box)
 
         self.func_combo.currentTextChanged.connect(self._update_ui)
+        self.degree_edit.textChanged.connect(self._update_ui)
         self.param_edits = {} 
         self._update_ui()
 
     def _update_ui(self):
         f = self.func_combo.currentText()
+        self.degree_edit.setVisible(f == "2D Polynomial")
+        
         math_style = "font-size: 18px; font-family: Cambria, serif; font-style: italic;"
         eq_str = ""
         self.param_names = []
         param_labels = []
         
-        if f == "Tilted Plane":
-            eq_str = f"<span style='{math_style}'>Z = A&middot;X + B&middot;Y + C</span>"
-            self.param_names, param_labels = ["A", "B", "C"], ["A", "B", "C"]
+        if f == "2D Polynomial":
+            try: deg = max(1, int(self.degree_edit.text()))
+            except Exception: deg = 1
             
-        elif f == "2D Paraboloid":
-            eq_str = f"<span style='{math_style}'>Z = A&middot;X<sup>2</sup> + B&middot;Y<sup>2</sup> + C&middot;X + D&middot;Y + E</span>"
-            self.param_names, param_labels = ["A", "B", "C", "D", "E"], ["A", "B", "C", "D", "E"]
+            terms = []
+            k = 0
+            for d in range(deg + 1):
+                for i in range(d + 1):
+                    j = d - i
+                    p_name = f"C{k}"
+                    self.param_names.append(p_name)
+                    param_labels.append(f"C<sub>{k}</sub>")
+                    
+                    term = f"C<sub>{k}</sub>"
+                    if i == 1: term += "&middot;X"
+                    elif i > 1: term += f"&middot;X<sup>{i}</sup>"
+                    
+                    if j == 1: term += "&middot;Y"
+                    elif j > 1: term += f"&middot;Y<sup>{j}</sup>"
+                    
+                    terms.append(term)
+                    k += 1
+            
+            eq_str = f"<span style='{math_style}'>Z = " + " + ".join(terms) + "</span>"
             
         elif f == "2D Gaussian":
-            # --- UPGRADE: Added a Tilted Baseline (D*X + E*Y + C) ---
             eq_str = (f"<table style='{math_style}' border='0' cellspacing='0' cellpadding='2' align='center'>"
                       f"<tr><td rowspan='2' valign='middle'>Z = A &middot; exp&nbsp;&nbsp;[ &minus; (</td>"
                       f"<td align='center' style='border-bottom: 1px solid black;'>&nbsp;(X &minus; X<sub>0</sub>)<sup>2</sup>&nbsp;</td>"
@@ -91,7 +112,23 @@ class Fit3DSurfaceDialog(QDialog):
                       f"<tr><td align='center'>2&sigma;<sub>x</sub><sup>2</sup></td><td align='center'>2&sigma;<sub>y</sub><sup>2</sup></td></tr></table>")
             self.param_names = ["A", "X0", "Y0", "sigma_x", "sigma_y", "D", "E", "C"]
             param_labels = ["A", "X<sub>0</sub>", "Y<sub>0</sub>", "&sigma;<sub>x</sub>", "&sigma;<sub>y</sub>", "D", "E", "C"]
+        
+        elif f == "2D Lorentzian":
+            eq_str = (f"<table style='{math_style}' border='0' cellspacing='0' cellpadding='2' align='center'>"
+                      f"<tr><td rowspan='2' valign='middle'>Z = </td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;A&nbsp;</td>"
+                      f"<td rowspan='2' valign='middle'> + D&middot;X + E&middot;Y + C</td></tr>"
+                      f"<tr><td align='center'><table style='{math_style}' border='0' cellspacing='0' cellpadding='0'>"
+                      f"<tr><td rowspan='2' valign='middle'>1 + &nbsp;[</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;X &minus; X<sub>0</sub>&nbsp;</td>"
+                      f"<td rowspan='2' valign='middle'>]<sup>2</sup> + [</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;Y &minus; Y<sub>0</sub>&nbsp;</td>"
+                      f"<td rowspan='2' valign='middle'>]<sup>2</sup></td></tr>"
+                      f"<tr><td align='center'>&gamma;<sub>x</sub></td><td align='center'>&gamma;<sub>y</sub></td></tr></table></td></tr></table>")
+            self.param_names = ["A", "X0", "Y0", "gamma_x", "gamma_y", "D", "E", "C"]
+            param_labels = ["A", "X<sub>0</sub>", "Y<sub>0</sub>", "&gamma;<sub>x</sub>", "&gamma;<sub>y</sub>", "D", "E", "C"]
             
+        elif f == "2D Harmonic (Ripple)":
+            eq_str = f"<span style='{math_style}'>Z = A &middot; sin(&omega;<sub>x</sub>X + &phi;<sub>x</sub>) &middot; sin(&omega;<sub>y</sub>Y + &phi;<sub>y</sub>) + C</span>"
+            self.param_names = ["A", "omega_x", "phi_x", "omega_y", "phi_y", "C"]
+            param_labels = ["A", "&omega;<sub>x</sub>", "&phi;<sub>x</sub>", "&omega;<sub>y</sub>", "&phi;<sub>y</sub>", "C"]
         self.eq_label.setText(f"<br>{eq_str}<br>")
         
         self.param_table.setRowCount(len(self.param_names))
@@ -136,22 +173,42 @@ class Fit3DSurfaceDialog(QDialog):
         f = self.func_combo.currentText()
         guesses = {}
         
-        if f == "Tilted Plane":
-            guesses = {"A": 0.0, "B": 0.0, "C": np.mean(z)}
-        elif f == "2D Paraboloid":
-            guesses = {"A": 0.0, "B": 0.0, "C": 0.0, "D": 0.0, "E": np.mean(z)}
+        if f == "2D Polynomial":
+            guesses = {p: 0.0 for p in self.param_names}
+            guesses["C0"] = np.mean(z)
         elif f == "2D Gaussian":
-            # --- UPGRADE: True Peak Hunting ---
             max_idx = np.argmax(z)
             guesses = {
                 "A": np.max(z) - np.min(z),
-                "X0": x[max_idx], # Hunt for the physical peak coordinates!
+                "X0": x[max_idx], 
                 "Y0": y[max_idx], 
                 "sigma_x": (np.max(x) - np.min(x)) / 6.0,
                 "sigma_y": (np.max(y) - np.min(y)) / 6.0,
                 "D": 0.0,
                 "E": 0.0,
                 "C": np.min(z)
+            }
+            
+        elif f == "2D Lorentzian":
+            max_idx = np.argmax(z)
+            guesses = {
+                "A": np.max(z) - np.min(z),
+                "X0": x[max_idx], 
+                "Y0": y[max_idx], 
+                "gamma_x": (np.max(x) - np.min(x)) / 10.0,
+                "gamma_y": (np.max(y) - np.min(y)) / 10.0,
+                "D": 0.0,
+                "E": 0.0,
+                "C": np.min(z)
+            }
+        elif f == "2D Harmonic (Ripple)":
+            guesses = {
+                "A": (np.max(z) - np.min(z)) / 2.0,
+                "omega_x": 2.0 * np.pi / ((np.max(x) - np.min(x)) / 3.0), # Assumes roughly 3 ripples across the domain
+                "phi_x": 0.0,
+                "omega_y": 2.0 * np.pi / ((np.max(y) - np.min(y)) / 3.0),
+                "phi_y": 0.0,
+                "C": np.mean(z)
             }
             
         for p, val in guesses.items():
@@ -165,7 +222,10 @@ class Fit3DSurfaceDialog(QDialog):
             except Exception: val = 1.0
             param_config[p] = {"mode": controls["mode"].currentText(), "value": val}
             
-        return self.func_combo.currentText(), param_config
+        degree = int(self.degree_edit.text()) if self.func_combo.currentText() == "2D Polynomial" else None
+        eq_str = self.eq_label.text().replace('<br>', '')
+        
+        return self.func_combo.currentText(), param_config, degree, eq_str
 
     def load_state(self, state):
         type_map = {
@@ -183,35 +243,49 @@ class Fit3DSurfaceDialog(QDialog):
                 
 # --- MODULAR 3D MATHS ENGINE ---
 
-def get_3d_model(func_type):
+def get_3d_model(func_type, degree=None):
     import numpy as np
-    if func_type == "Tilted Plane":
-        def model(xy, A, B, C):
-            x, y = xy
-            return A * x + B * y + C
-        return model, ["A", "B", "C"]
+    
+    if func_type == "2D Polynomial":
+        if degree is None: degree = 1
+        param_names = [f"C{k}" for k in range(int((degree+1)*(degree+2)/2))]
         
-    elif func_type == "2D Paraboloid":
-        def model(xy, A, B, C, D, E):
+        def model(xy, *args):
             x, y = xy
-            return A * x**2 + B * y**2 + C * x + D * y + E
-        return model, ["A", "B", "C", "D", "E"]
+            z = np.zeros_like(x)
+            k = 0
+            for d in range(degree + 1):
+                for i in range(d + 1):
+                    j = d - i
+                    z += args[k] * (x**i) * (y**j)
+                    k += 1
+            return z
+        return model, param_names
         
     elif func_type == "2D Gaussian":
-        # --- UPGRADE: Execute the new Tilted Baseline parameters ---
         def model(xy, A, X0, Y0, sigma_x, sigma_y, D, E, C):
             x, y = xy
             return A * np.exp(-(((x - X0)**2) / (2 * sigma_x**2) + ((y - Y0)**2) / (2 * sigma_y**2))) + D*x + E*y + C
         return model, ["A", "X0", "Y0", "sigma_x", "sigma_y", "D", "E", "C"]
         
+    elif func_type == "2D Lorentzian":
+        def model(xy, A, X0, Y0, gamma_x, gamma_y, D, E, C):
+            x, y = xy
+            return (A / (1 + ((x - X0) / gamma_x)**2 + ((y - Y0) / gamma_y)**2)) + D*x + E*y + C
+        return model, ["A", "X0", "Y0", "gamma_x", "gamma_y", "D", "E", "C"]
+        
+    elif func_type == "2D Harmonic (Ripple)":
+        def model(xy, A, omega_x, phi_x, omega_y, phi_y, C):
+            x, y = xy
+            return A * np.sin(omega_x * x + phi_x) * np.sin(omega_y * y + phi_y) + C
+        return model, ["A", "omega_x", "phi_x", "omega_y", "phi_y", "C"]
     return None, []
 
-def execute_3d_surface_fit(pts, func_type, param_config):
-    """
-    Universally optimises any 3D model, respecting locked (Manual) parameters.
-    Expects pts as an Nx3 NumPy array: [X, Y, Z]
-    """
-    model, param_names = get_3d_model(func_type)
+def execute_3d_surface_fit(pts, func_type, param_config, degree=None):
+    from scipy.optimize import curve_fit
+    import warnings
+    
+    model, param_names = get_3d_model(func_type, degree)
     if model is None: raise ValueError(f"Unknown function type: {func_type}")
 
     x_data, y_data, z_data = pts[:, 0], pts[:, 1], pts[:, 2]
@@ -220,7 +294,6 @@ def execute_3d_surface_fit(pts, func_type, param_config):
     fixed_params = {}
     p0 = []
 
-    # Sort parameters into free (Auto) and fixed (Manual)
     for p in param_names:
         if param_config[p]["mode"] == "Auto":
             free_params.append(p)
@@ -228,9 +301,30 @@ def execute_3d_surface_fit(pts, func_type, param_config):
         else:
             fixed_params[p] = float(param_config[p]["value"])
 
-    # If all parameters are locked, skip the solver entirely
     if not free_params:
         return [param_config[p]["value"] for p in param_names], param_names, model
+
+    def dynamic_wrapper(xy_val, *args):
+        kwargs = dict(fixed_params)
+        for name, val in zip(free_params, args):
+            kwargs[name] = val
+        full_args = [kwargs[p] for p in param_names]
+        return model(xy_val, *full_args)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        popt, _ = curve_fit(dynamic_wrapper, (x_data, y_data), z_data, p0=p0, maxfev=20000)
+
+    final_params = []
+    popt_idx = 0
+    for p in param_names:
+        if p in free_params:
+            final_params.append(popt[popt_idx])
+            popt_idx += 1
+        else:
+            final_params.append(fixed_params[p])
+
+    return final_params, param_names, model
 
     # Dynamic wrapper to inject fixed parameters during SciPy iteration
     def dynamic_wrapper(xy_val, *args):
