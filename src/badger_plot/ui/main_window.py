@@ -3160,11 +3160,11 @@ class BadgerLoopQtGraph(QMainWindow):
         dlg = CustomFit3DDialog(self.dataset, self)
         if dlg.exec() != QDialog.Accepted: return
         
-        # 1. Intercept the returned data
-        raw_eq, py_eq, html_eq, used_cols, param_names, param_config, stats = dlg.get_result()
+        # 1. Intercept the returned data (Now expecting pcov!)
+        raw_eq, py_eq, html_eq, used_cols, param_names, param_config, pcov = dlg.get_result()
         final_params = [param_config[p]["value"] for p in param_names]
 
-        # 2. Build the 3D grid wrapper
+        # 2. Build the 3D grid wrapper (This is the missing function!)
         def custom_model_calc(xy_tuple, *args):
             x_val, y_val = xy_tuple
             
@@ -3192,8 +3192,9 @@ class BadgerLoopQtGraph(QMainWindow):
             "param_config": param_config,
             "equation": raw_eq,
             "html_equation": html_eq,
-            "aux_cols": used_cols, # <--- Add this line to track dependencies!
-            "stats": stats
+            "aux_cols": used_cols, 
+            "pcov": pcov, # Save raw covariance
+            "stats": None # Trigger the async button!
         })
 
         # 4. Reveal UI Buttons & Render!
@@ -3743,7 +3744,7 @@ class BadgerLoopQtGraph(QMainWindow):
         pts = all_pts[np.isfinite(all_pts).all(axis=1)]
         
         try:
-            final_params, param_names, model_callable, stats = execute_3d_surface_fit(pts, func_type, param_config, degree)
+            final_params, param_names, model_callable, pcov = execute_3d_surface_fit(pts, func_type, param_config, degree)
         except Exception as e:
             from ui.dialogs.data_mgmt import CopyableErrorDialog
             CopyableErrorDialog("Fitting Error", "Optimization failed.", str(e), self).exec()
@@ -3760,7 +3761,8 @@ class BadgerLoopQtGraph(QMainWindow):
             "param_config": param_config,
             "degree": degree,
             "equation": eq_str,
-            "stats": stats # <--- This is the crucial missing line!
+            "pcov": pcov, # Save raw covariance
+            "stats": None # Trigger the async button!
         })
         
         self.plot()
@@ -4767,12 +4769,36 @@ class BadgerLoopQtGraph(QMainWindow):
                             x, y_data, aux_dict, _ = res
                             y_calc = fit["callable"](x, aux_dict) if fit["type"] == "custom" else fit["callable"](x)
 
+                    elif mode == "3D":
+                        data_cache = getattr(self, 'last_plotted_data', {})
+                        if data_cache.get('mode') == '3D' and data_cache.get('data'):
+                            pts_list = []
+                            for item in data_cache['data']:
+                                if str(item[0]) == "SURFACE":
+                                    grid_z = item[2]['z_2d'].flatten()
+                                    X, Y = np.meshgrid(item[2]['x_1d'], item[2]['y_1d'], indexing='ij')
+                                    pts_list.append(np.column_stack((X.flatten(), Y.flatten(), grid_z)))
+                                else:
+                                    pts_list.append(item[2])
+                                    
+                            if pts_list:
+                                all_pts = np.vstack(pts_list)
+                                pts = all_pts[np.isfinite(all_pts).all(axis=1)]
+                                if len(pts) > 0:
+                                    x_data, y_data_3d, z_data = pts[:, 0], pts[:, 1], pts[:, 2]
+                                    
+                                    # We pass the flattened Z array as our 'y_data' for the universal calculator
+                                    y_data = z_data 
+                                    
+                                    # Both Custom and Common 3D callables accept a tuple of (X, Y) and unpacked params!
+                                    y_calc = fit["callable"]((x_data, y_data_3d), *fit.get("params", []))
+
                     if y_data is not None and y_calc is not None:
                         param_count = len(fit.get("params", []))
-                        # Pass the saved pcov matrix into the calculator!
                         return calculate_fit_statistics(y_data, y_calc, fit.get("pcov"), param_count)
                     return None
                     
+                # --- THE MISSING LINE IS BACK! ---
                 dlg.stat_worker = BackgroundWorker(heavy_math)
                 
                 def on_success(new_stats):
