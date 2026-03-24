@@ -4,7 +4,7 @@ import re
 import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters as pgexp
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QDialog, QMainWindow, QVBoxLayout, QHBoxLayout, QFormLayout,
     QComboBox, QLineEdit, QLabel, QPushButton, QTableWidget, QHeaderView,
@@ -86,7 +86,7 @@ class FitFunctionDialog(QDialog):
         f = self.func_combo.currentText()
         self.degree_edit.setVisible(f == "Polynomial")
         self.log_base_edit.setVisible(f == "Logarithmic")
-        self.auto_guess_btn.setVisible(f in ["Gaussian", "Lorentzian", "Polynomial"])
+        self.auto_guess_btn.setVisible(True)
         
         math_style = "font-size: 18px; font-family: Cambria, serif; font-style: italic;"
         eq_str = ""
@@ -170,6 +170,38 @@ class FitFunctionDialog(QDialog):
                 smart_p0 = np.polyfit(x, y, deg)
             for i, p in enumerate(self.param_names):
                 self.param_edits[p]["val"].setText(f"{smart_p0[i]:.4g}")
+                
+        elif f == "Logarithmic":
+            try:
+                base_str = self.log_base_edit.text()
+                b = np.e if base_str.lower() == 'e' else float(base_str)
+                # Failsafe: Only use strictly positive X values
+                valid = x > 0
+                if np.any(valid):
+                    x_val, y_val = x[valid], y[valid]
+                    # Transform X and run a linear regression
+                    x_trans = np.log(x_val) / np.log(b)
+                    slope, intercept = np.polyfit(x_trans, y_val, 1)
+                    self.param_edits["a"]["val"].setText(f"{slope:.4g}")
+                    self.param_edits["c"]["val"].setText(f"{intercept:.4g}")
+            except Exception: pass
+            
+        elif f == "Exponential":
+            try:
+                # Failsafe: Guess the baseline slightly below the minimum Y to avoid log(0)
+                c_guess = np.min(y) - 0.01 * abs(np.min(y))
+                y_shifted = y - c_guess
+                valid = y_shifted > 0
+                if np.any(valid):
+                    x_val, y_val = x[valid], y_shifted[valid]
+                    # Linearise the exponential and fit
+                    b_guess, ln_a_guess = np.polyfit(x_val, np.log(y_val), 1)
+                    a_guess = np.exp(ln_a_guess)
+                    
+                    self.param_edits["a"]["val"].setText(f"{a_guess:.4g}")
+                    self.param_edits["b"]["val"].setText(f"{b_guess:.4g}")
+                    self.param_edits["c"]["val"].setText(f"{c_guess:.4g}")
+            except Exception: pass
 
     def get_result(self):
         param_config = {}
@@ -207,6 +239,243 @@ class FitFunctionDialog(QDialog):
                 self.param_edits[p]["mode"].setCurrentText(config["mode"])
                 self.param_edits[p]["val"].setText(f"{config['value']:.6g}")
 
+class LocalWorker(QThread):
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+    progress = pyqtSignal(int) # <--- NEW: Add progress signal
+
+    def __init__(self, func, *args):
+        super().__init__()
+        self.func = func
+        self.args = args
+
+    def run(self):
+        try:
+            res = self.func(*self.args)
+            self.finished.emit(res)
+        except Exception as e:
+            self.error.emit(str(e))
+            
+def calculate_fit_statistics(y_data, y_calc, pcov, param_count, y_err=None):
+    """Generates standard goodness-of-fit metrics for any model."""
+    import numpy as np
+    
+    N = len(y_data)
+    dof = max(1, N - param_count)
+    residuals = y_data - y_calc
+    rmse = np.sqrt(np.mean(residuals**2))
+
+    # Calculate Chi-Squared
+    if y_err is not None and np.any(y_err > 0):
+        # Weighted by explicit experimental uncertainties
+        safe_err = np.where(y_err > 0, y_err, np.inf)
+        chi_sq = np.sum((residuals / safe_err)**2)
+    else:
+        # Unweighted (Sum of Squared Errors)
+        chi_sq = np.sum(residuals**2)
+
+    red_chi_sq = chi_sq / dof
+
+    # Calculate parameter uncertainties from the covariance matrix
+    param_errs = []
+    if pcov is not None and not np.isinf(pcov).all() and not np.isnan(pcov).all():
+        try:
+            param_errs = np.sqrt(np.diag(pcov)).tolist()
+        except Exception:
+            param_errs = [float('nan')] * param_count
+    else:
+        param_errs = [float('nan')] * param_count
+
+    return {
+        "dof": dof,
+        "chi_sq": chi_sq,
+        "red_chi_sq": red_chi_sq,
+        "rmse": rmse,
+        "param_errs": param_errs
+    }
+
+class CommonFitWorker(QThread):
+    finished = pyqtSignal(dict)
+    progress = pyqtSignal(int, str)
+    error = pyqtSignal(str)
+
+    def __init__(self, func_type, degree_text, log_base_text, param_config, x, y):
+        super().__init__()
+        self.func_type = func_type
+        self.degree_text = degree_text
+        self.log_base_text = log_base_text
+        self.param_config = param_config
+        self.x = x
+        self.y = y
+
+    def run(self):
+        try:
+            import numpy as np
+            from scipy.optimize import curve_fit
+            import warnings
+            
+            self.progress.emit(10, f"Initialising {self.func_type} model...")
+            
+            # 1. Internal Universal Fitter
+            def execute_fit(base_model, param_names):
+                free_params = []
+                fixed_params = {}
+                p0 = []
+                for p in param_names:
+                    if self.param_config[p]["mode"] == "Auto":
+                        free_params.append(p)
+                        p0.append(float(self.param_config[p]["value"]))
+                    else:
+                        fixed_params[p] = float(self.param_config[p]["value"])
+                
+                if not free_params:
+                    # If all parameters are fixed, return empty stats and zero errors
+                    res["stats"] = None
+                    res["param_errs"] = [0.0] * len(param_names)
+                    res["pcov"] = None # <--- ADD THIS
+                    return [self.param_config[p]["value"] for p in param_names]
+                    
+                def dynamic_wrapper(x_val, *args):
+                    kwargs = dict(fixed_params)
+                    for name, val in zip(free_params, args):
+                        kwargs[name] = val
+                    full_args = [kwargs[p] for p in param_names]
+                    return base_model(x_val, *full_args)
+                    
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    # --- FIX: Capture pcov ---
+                    popt, pcov = curve_fit(dynamic_wrapper, self.x, self.y, p0=p0, maxfev=20000)
+                    
+                final_params = []
+                full_param_errs = []
+                popt_idx = 0
+                
+                # Extract the uncertainties for the free parameters
+                free_errs = []
+                if pcov is not None and not np.isinf(pcov).all() and not np.isnan(pcov).all():
+                    try: free_errs = np.sqrt(np.diag(pcov)).tolist()
+                    except: free_errs = [float('nan')] * len(free_params)
+                else:
+                    free_errs = [float('nan')] * len(free_params)
+
+                for p in param_names:
+                    if p in free_params:
+                        final_params.append(popt[popt_idx])
+                        full_param_errs.append(free_errs[popt_idx])
+                        popt_idx += 1
+                    else:
+                        final_params.append(fixed_params[p])
+                        full_param_errs.append(0.0) # Fixed parameters have 0 uncertainty
+                
+                # Defer the heavy stats, but keep the covariance errors
+                res["stats"] = None
+                res["param_errs"] = full_param_errs 
+                res["pcov"] = pcov # <--- ADD THIS
+                
+                return final_params
+
+            self.progress.emit(25, "Setting up mathematical equations...")
+
+            # 2. Define the requested model
+            res = {"type_key": self.func_type.lower()}
+            
+            if self.func_type == "Polynomial":
+                degree = int(self.degree_text)
+                param_names = [f"c{i}" for i in range(degree + 1)]
+                
+                if all(self.param_config[p]["mode"] == "Auto" and self.param_config[p]["value"] == 1.0 for p in param_names):
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore')
+                        smart_p0 = np.polyfit(self.x, self.y, degree)
+                    for i, p in enumerate(param_names): self.param_config[p]["value"] = smart_p0[i]
+                        
+                def model(x_val, *args):
+                    return sum(c * (x_val**(degree-i)) for i, c in enumerate(args))
+                
+                self.progress.emit(40, "Running non-linear optimiser...")
+                final_params = execute_fit(model, param_names)
+                
+                poly = np.poly1d(final_params)
+                res["callable"] = poly
+                res["equation"] = "y = " + " + ".join(f"{c:.3g}x^{i}" for i, c in enumerate(final_params[::-1]))
+                res["display_name"] = f"Poly (deg {degree})"
+                res["degree"] = degree
+                res["coeffs"] = final_params
+
+            elif self.func_type == "Logarithmic":
+                base = np.e if self.log_base_text.lower() == "e" else float(self.log_base_text)
+                def model(x_val, a, c): return a * np.log(x_val) / np.log(base) + c
+                param_names = ["a", "c"]
+                
+                self.progress.emit(40, "Running non-linear optimiser...")
+                final_params = execute_fit(model, param_names)
+                res["callable"] = lambda v: model(v, *final_params)
+                res["display_name"] = "Logarithmic"
+                res["base"] = self.log_base_text
+                
+            elif self.func_type == "Exponential":
+                def model(x_val, a, b, c): return a * np.exp(b * x_val) + c
+                param_names = ["a", "b", "c"]
+                self.progress.emit(40, "Running non-linear optimiser...")
+                final_params = execute_fit(model, param_names)
+                res["callable"] = lambda v: model(v, *final_params)
+                res["display_name"] = "Exponential"
+                
+            elif self.func_type == "Gaussian":
+                def model(x_val, A, mu, sigma): return A * np.exp(-(x_val - mu)**2 / (2 * sigma**2))
+                param_names = ["A", "mu", "sigma"]
+                
+                target_idx = np.argmax(self.y) if abs(self.y.max() - self.y.mean()) > abs(self.y.min() - self.y.mean()) else np.argmin(self.y)
+                peak_x = self.x[target_idx]
+                
+                if self.param_config["A"]["mode"] == "Auto" and self.param_config["A"]["value"] == 1.0: self.param_config["A"]["value"] = self.y.max()
+                if self.param_config["mu"]["mode"] == "Auto" and self.param_config["mu"]["value"] == 1.0: self.param_config["mu"]["value"] = peak_x
+                if self.param_config["sigma"]["mode"] == "Auto" and self.param_config["sigma"]["value"] == 1.0: self.param_config["sigma"]["value"] = np.std(self.x)
+
+                self.progress.emit(40, "Running non-linear optimiser...")
+                final_params = execute_fit(model, param_names)
+                res["callable"] = lambda v: model(v, *final_params)
+                res["display_name"] = "Gaussian"
+                
+            elif self.func_type == "Lorentzian":
+                def model(x_val, A, x0, gamma): return A / (1 + ((x_val - x0) / gamma)**2)
+                param_names = ["A", "x0", "gamma"]
+                
+                target_idx = np.argmax(self.y) if abs(self.y.max() - self.y.mean()) > abs(self.y.min() - self.y.mean()) else np.argmin(self.y)
+                peak_x = self.x[target_idx]
+                
+                if self.param_config["A"]["mode"] == "Auto" and self.param_config["A"]["value"] == 1.0: self.param_config["A"]["value"] = self.y.max()
+                if self.param_config["x0"]["mode"] == "Auto" and self.param_config["x0"]["value"] == 1.0: self.param_config["x0"]["value"] = peak_x
+                if self.param_config["gamma"]["mode"] == "Auto" and self.param_config["gamma"]["value"] == 1.0: self.param_config["gamma"]["value"] = np.std(self.x)
+
+            # 3. Generate High-Res Curve
+            self.progress.emit(80, "Generating high-resolution plot curve...")
+            x_min = max(1e-15, self.x.min()) if self.func_type == "Logarithmic" else self.x.min()
+            xfit = np.linspace(x_min, self.x.max(), 500)
+            
+            # Use the generated callable
+            yfit = res["callable"](xfit)
+            
+            # Sanitize to prevent OpenGL/PyQtGraph crashes
+            y_max, y_min = np.nanmax(self.y), np.nanmin(self.y)
+            y_span = abs(y_max - y_min) or 1.0
+            safe_max = y_max + (y_span * 50)
+            safe_min = y_min - (y_span * 50)
+            
+            yfit = np.nan_to_num(yfit, nan=0.0, posinf=safe_max, neginf=safe_min)
+            yfit = np.clip(yfit, safe_min, safe_max)
+
+            self.progress.emit(95, "Snapping to canvas...")
+            res["xfit"] = xfit
+            res["yfit"] = yfit
+            res["params"] = final_params
+            res["param_names"] = param_names
+            
+            self.finished.emit(res)
+            
+        except Exception as e:
+            self.error.emit(str(e))
 
 class CustomFitDialog(QDialog):
     def __init__(self, dataset, parent_gui):
@@ -270,12 +539,30 @@ class CustomFitDialog(QDialog):
         param_creator_layout.addWidget(add_param_btn)
         layout.addLayout(param_creator_layout)
 
-        self.param_btn_layout = QHBoxLayout()
-        layout.addLayout(self.param_btn_layout)
+        # --- NEW: Vertical Scroll Area for Parameters ---
+        self.param_scroll = QScrollArea()
+        self.param_scroll.setWidgetResizable(True)
+        self.param_scroll.setMinimumHeight(120) 
+        self.param_scroll.setMaximumHeight(200) # Stop it from taking over the screen
+        
+        self.param_scroll_widget = QWidget()
+        self.param_btn_layout = QVBoxLayout(self.param_scroll_widget)
+        self.param_btn_layout.setAlignment(Qt.AlignTop) 
+        
+        self.param_scroll.setWidget(self.param_scroll_widget)
+        layout.addWidget(self.param_scroll)
+        # ------------------------------------------------
 
         math_lbl_layout = QHBoxLayout()
         math_lbl_layout.addWidget(QLabel("<b>3. Equation:</b> <i>(+, -, *, /, ^, sin(), exp()...)</i>"))
         math_lbl_layout.addStretch()
+        
+        # --- NEW: Template Injector Dropdown ---
+        self.template_combo = QComboBox()
+        self.template_combo.addItems(["Template...", "Gaussian", "Lorentzian", "Sine Wave", "Nth Order Polynomial"])
+        self.template_combo.activated.connect(self.apply_template)
+        math_lbl_layout.addWidget(self.template_combo)
+        # ---------------------------------------
         
         self.load_func_btn = QPushButton("📂 Load Saved Function")
         self.load_func_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 4px 10px;")
@@ -285,6 +572,10 @@ class CustomFitDialog(QDialog):
         layout.addLayout(math_lbl_layout)
         
         self.equation_input = QTextEdit()
+        # --- NEW: Horizontal scrolling for long equations ---
+        self.equation_input.setLineWrapMode(QTextEdit.NoWrap) 
+        self.equation_input.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # ----------------------------------------------------
         self.equation_input.setMaximumHeight(80)
         self.equation_input.setFont(pg.QtGui.QFont("Consolas", 11))
         self.equation_input.textChanged.connect(self.update_preview)
@@ -292,10 +583,16 @@ class CustomFitDialog(QDialog):
 
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
-        # --- THEME UPDATE: Fix the background and text color of the preview box ---
         self.preview_label.setStyleSheet(f"background-color: {theme.panel_bg}; color: {theme.fg}; border: 1px solid {theme.border}; font-size: 22px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
-        self.preview_label.setMinimumHeight(100)
-        layout.addWidget(self.preview_label)
+        
+        # --- NEW: Scroll Area for the Live Preview ---
+        self.preview_scroll = QScrollArea()
+        self.preview_scroll.setWidgetResizable(True)
+        self.preview_scroll.setWidget(self.preview_label) # <-- Fixed variable name
+        self.preview_scroll.setMinimumHeight(100)
+        self.preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        layout.addWidget(self.preview_scroll)
+        # ---------------------------------------------
 
         layout.addWidget(QLabel("<b>4. Parameter Settings:</b>"))
         self.param_table = QTableWidget()
@@ -310,6 +607,9 @@ class CustomFitDialog(QDialog):
         # --- NEW INTERACTIVE BUTTONS ---
         btn_box = QHBoxLayout()
         
+        # --- NEW INTERACTIVE BUTTONS ---
+        btn_box = QHBoxLayout()
+        
         self.auto_guess_btn = QPushButton("✨ Auto-Guess Values")
         self.auto_guess_btn.setStyleSheet(f"font-weight: bold; color: {theme.success_text}; padding: 6px;")
         self.auto_guess_btn.clicked.connect(self.run_auto_guess)
@@ -320,54 +620,253 @@ class CustomFitDialog(QDialog):
         self.optimize_btn.clicked.connect(self.run_optimization)
         self.optimize_btn.setEnabled(False)
         
+        # --- FIX 2: ADD STOP BUTTON ---
+        self.stop_opt_btn = QPushButton("⏹ Stop Optimization")
+        self.stop_opt_btn.setStyleSheet(f"font-weight: bold; color: {theme.danger_text}; padding: 6px;")
+        self.stop_opt_btn.clicked.connect(self.stop_optimization)
+        self.stop_opt_btn.setVisible(False)
+        # ------------------------------
+        
         self.done_btn = QPushButton("Done")
         self.done_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         self.done_btn.clicked.connect(self.handle_done)
+        self.done_btn.setEnabled(False) 
         
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         
         btn_box.addWidget(self.auto_guess_btn)
         btn_box.addWidget(self.optimize_btn)
+        btn_box.addWidget(self.stop_opt_btn) # Inserted into layout
         btn_box.addStretch()
         btn_box.addWidget(cancel_btn)
         btn_box.addWidget(self.done_btn)
         layout.addLayout(btn_box)
         
         self.param_configs = {}
+        self._swarm_count = 0 # Tracks if we should use Global or Targeted bounds
+        
+    def apply_template(self):
+        template_name = self.template_combo.currentText()
+        if template_name == "Template...": return
+
+        if template_name == "Nth Order Polynomial":
+            from PyQt5.QtWidgets import QInputDialog
+            # Pop up a dialog asking for the degree (default 2, min 1, max 100)
+            deg, ok = QInputDialog.getInt(self, "Polynomial Degree", "Enter polynomial degree (n):", 2, 1, 100)
+            if not ok:
+                self.template_combo.setCurrentIndex(0)
+                return
+                
+            # Generator for Excel-style parameter names (A, B... Z, AA, AB...)
+            def get_excel_col(index):
+                name = ""
+                while index >= 0:
+                    name = chr((index % 26) + 65) + name
+                    index = (index // 26) - 1
+                return name
+
+            params = ["X_norm"] # <--- NEW: Inject the normalisation constant
+            terms = []
+            for i in range(deg + 1):
+                p_name = get_excel_col(i)
+                params.append(p_name)
+                power = deg - i
+                
+                if power == 0:
+                    terms.append(f"{{{p_name}}}")
+                elif power == 1:
+                    terms.append(f"{{{p_name}}} * (x / {{X_norm}})")
+                else:
+                    terms.append(f"{{{p_name}}} * (x / {{X_norm}})^{power}")
+                    
+            data = {
+                "eq": " + ".join(terms),
+                "params": params
+            }
+            
+        else:
+            # Standard templates
+            templates = {
+                "Gaussian": {
+                    "eq": "{A} * exp(-(((x - {mu})^2) / (2 * {sigma}^2))) + {C}",
+                    "params": ["A", "mu", "sigma", "C"]
+                },
+                "Lorentzian": {
+                    "eq": "{A} / (1 + ((x - {x0})/{gamma})^2) + {C}",
+                    "params": ["A", "x0", "gamma", "C"]
+                },
+                "Sine Wave": {
+                    "eq": "{A} * sin({omega} * x + {phi}) + {C}",
+                    "params": ["A", "omega", "phi", "C"]
+                }
+            }
+            if template_name not in templates: return
+            data = templates[template_name]
+
+        self.suspend_updates = True 
+
+        # 1. Deep clean the UI and memory
+        self.parameters.clear()
+        self.param_table.setRowCount(0)
+        self.param_configs.clear()
+        
+        while self.param_btn_layout.count():
+            child = self.param_btn_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        self.equation_input.blockSignals(True)
+        self.equation_input.clear()
+
+        # 2. Inject new parameters
+        for p_name in data["params"]:
+            self.new_param_edit.setText(p_name)
+            self.add_parameter()
+            # --- NEW: Lock the normalisation constant so the optimiser ignores it ---
+            if p_name == "X_norm":
+                self.param_configs[p_name]["mode"].setCurrentText("Manual")
+            # ------------------------------------------------------------------------
+
+        # 3. Inject equation
+        self.equation_input.setPlainText(data["eq"])
+        self.template_combo.setCurrentIndex(0)
+        
+        self.suspend_updates = False
+        self.equation_input.blockSignals(False)
+        self.update_preview()
 
     def load_custom_function(self):
-        fname, _ = QFileDialog.getOpenFileName(self, "Load Custom Function", "", "Text files (*.txt)")
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        fname, _ = QFileDialog.getOpenFileName(self, "Load Saved Function", "", "Text files (*.txt)")
         if not fname: return
         
         with open(fname, "r") as f:
             lines = [l.strip() for l in f if l.strip()]
             
-        if not lines or lines[0].lower() != "custom":
-            QMessageBox.warning(self, "Invalid File", "This is not a saved Custom Function file.\n(It may be a standard Gaussian/Polynomial fit).")
-            return
+        if not lines: return
+
+        # --- FIX: Parse the stats block into memory before truncating! ---
+        parsed_stats = None
+        stats_idx = -1
+        for i, line in enumerate(lines):
+            if line.startswith("### STATS ###"):
+                stats_idx = i
+                break
+                
+        if stats_idx != -1:
+            stats_lines = lines[stats_idx+1:]
+            lines = lines[:stats_idx]
+            parsed_stats = {}
+            for sl in stats_lines:
+                if ":" in sl:
+                    k, v = sl.split(":", 1)
+                    k, v = k.strip(), v.strip()
+                    if k == "param_errs":
+                        parsed_stats[k] = [float(x) if x != "NaN" else float('nan') for x in v.split(",")]
+                    else:
+                        try: parsed_stats[k] = float(v)
+                        except: pass
             
-        if len(lines) < 2:
-            QMessageBox.warning(self, "Corrupted File", "The function file appears to be empty.")
+        self.latest_stats = parsed_stats
+        # -----------------------------------------------------------------
+
+        type_line = lines[0].lower()
+        
+        # 1. 3D Gatekeeper
+        if type_line.startswith("3d:"):
+            QMessageBox.warning(self, "Format Mismatch", "This is a 3D surface function and cannot be loaded into the 2D custom fitter.")
             return
+
+        # 2. Deep clean the UI
+        self.parameters.clear()
+        self.param_table.setRowCount(0)
+        self.param_configs.clear()
+        
+        while self.param_btn_layout.count():
+            child = self.param_btn_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        self.equation_input.blockSignals(True)
+        self.equation_input.clear()
+
+        try:
+            # 3. Universal Translator Engine
+            if type_line == "custom":
+                raw_eq = lines[1]
+                param_names = [p.strip() for p in lines[2].split(",") if p.strip()] if len(lines) > 2 else []
+                param_vals = [float(v) for v in lines[3:]] if len(lines) > 3 else []
+                
+            elif type_line == "polynomial":
+                deg = int(lines[1].split(":")[1].strip())
+                param_vals = [float(x) for x in lines[2:]]
+                param_names = [f"c{i}" for i in range(deg + 1)]
+                terms = []
+                for i in range(deg + 1):
+                    power = deg - i
+                    if power == 0: terms.append(f"{{c{i}}}")
+                    elif power == 1: terms.append(f"{{c{i}}}*x")
+                    else: terms.append(f"{{c{i}}}*x^{power}")
+                raw_eq = " + ".join(terms)
+
+            elif type_line == "logarithmic":
+                base = lines[1].split(":")[1].strip()
+                param_vals = [float(x) for x in lines[2:]]
+                param_names = ["a", "c"]
+                if base.lower() == 'e': raw_eq = "{a} * ln(x) + {c}"
+                else: raw_eq = f"{{a}} * log_{base}(x) + {{c}}"
+
+            elif type_line == "exponential":
+                param_vals = [float(x) for x in lines[1:]]
+                param_names = ["a", "b", "c"]
+                raw_eq = "{a} * exp({b}*x) + {c}"
+
+            elif type_line == "gaussian":
+                param_vals = [float(x) for x in lines[1:]]
+                param_names = ["A", "mu", "sigma"]
+                if len(param_vals) > 3: 
+                    param_names.append("C")
+                    raw_eq = "{A} * exp(-(((x - {mu})^2) / (2 * {sigma}^2))) + {C}"
+                else:
+                    raw_eq = "{A} * exp(-(((x - {mu})^2) / (2 * {sigma}^2)))"
+
+            elif type_line == "lorentzian":
+                param_vals = [float(x) for x in lines[1:]]
+                param_names = ["A", "x0", "gamma"]
+                if len(param_vals) > 3:
+                    param_names.append("C")
+                    raw_eq = "{A} / (1 + ((x - {x0})/{gamma})^2) + {C}"
+                else:
+                    raw_eq = "{A} / (1 + ((x - {x0})/{gamma})^2)"
+                    
+            elif type_line == "harmonic" or type_line == "sine wave":
+                param_vals = [float(x) for x in lines[1:]]
+                param_names = ["A", "omega", "phi", "C"]
+                raw_eq = "{A} * sin({omega} * x + {phi}) + {C}"
+
+            else:
+                QMessageBox.warning(self, "Invalid File", f"Unrecognised function format: {type_line}")
+                self.equation_input.blockSignals(False)
+                return
+
+            self.equation_input.setPlainText(raw_eq)
             
-        raw_eq = lines[1]
-        param_names = [p.strip() for p in lines[2].split(",") if p.strip()] if len(lines) > 2 else []
-        param_vals = [float(v) for v in lines[3:]] if len(lines) > 3 else []
-        
-        self.equation_input.setPlainText(raw_eq)
-        
-        for i, p_name in enumerate(param_names):
-            if p_name not in self.parameters:
+            # 4. Inject the translated components into the UI
+            for i, p_name in enumerate(param_names):
                 self.new_param_edit.setText(p_name)
                 self.add_parameter()
-                
-            if i < len(param_vals) and p_name in self.param_configs:
-                self.param_configs[p_name]["mode"].setCurrentText("Manual") 
-                self.param_configs[p_name]["val"].setText(f"{param_vals[i]:.6g}")
-                
-        self.update_preview()
-        self._check_boxes_filled()
+                if i < len(param_vals) and p_name in self.param_configs:
+                    self.param_configs[p_name]["mode"].setCurrentText("Manual") 
+                    self.param_configs[p_name]["val"].setText(f"{param_vals[i]:.6g}")
+                    
+            self.equation_input.blockSignals(False)
+            self.update_preview()
+            self._check_boxes_filled()
+            
+        except Exception as e:
+            self.equation_input.blockSignals(False)
+            QMessageBox.critical(self, "Load Error", f"Failed to parse function file:\n{e}")
 
     def load_state(self, state):
         self.equation_input.setPlainText(state.get("raw_equation", ""))
@@ -383,15 +882,15 @@ class CustomFitDialog(QDialog):
         self.update_preview()
 
     def _check_boxes_filled(self):
+        if getattr(self, 'suspend_updates', False): return
         if not getattr(self, 'is_valid', False) or not self.parameters:
             self.optimize_btn.setEnabled(False)
             self.auto_guess_btn.setEnabled(False)
+            self.done_btn.setEnabled(False) # Lock if invalid
             return
             
-        # The Global Swarm can run even if the boxes are empty
         self.auto_guess_btn.setEnabled(True)
         
-        # Local Optimization requires actual numbers
         all_filled = True
         for controls in self.param_configs.values():
             if not controls["val"].text().strip():
@@ -401,8 +900,16 @@ class CustomFitDialog(QDialog):
         self.optimize_btn.setEnabled(all_filled)
         if all_filled:
             self._draw_live_preview()
+        else:
+            self.done_btn.setEnabled(False)
             
     def run_auto_guess(self):
+        # --- NEW: Router Logic ---
+        if getattr(self, '_swarm_count', 0) > 0:
+            self.run_global_search()
+            return
+        # -------------------------
+        
         import numpy as np
         if not self.is_valid or not self.parameters: return
         
@@ -414,34 +921,42 @@ class CustomFitDialog(QDialog):
         y_max, y_min = np.max(y), np.min(y)
         y_ptp = y_max - y_min
         y_mean = np.mean(y)
-        x_mean = np.mean(x)
+        
+        # --- FIX: Find the actual X coordinate of the peak ---
+        target_idx = np.argmax(y) if abs(y_max - y_mean) > abs(y_min - y_mean) else np.argmin(y)
+        x_peak = x[target_idx]
         x_std = np.std(x) if np.std(x) != 0 else 1.0
+        # -----------------------------------------------------
+
+        # --- FIX 1: Suspend live updates while we fill the boxes! ---
+        self.suspend_updates = True
 
         # 2. Smart Heuristic Mapping
         for p in self.parameters:
-            if self.param_configs[p]["mode"].currentText() != "Auto":
-                continue
-                
+            is_auto = self.param_configs[p]["mode"].currentText() == "Auto"
             p_lower = p.lower()
             
+            # --- FIX: Allow X_norm to be populated even if it is locked to Manual ---
+            if not is_auto and p_lower != 'x_norm':
+                continue
+            
             # Amplitude / Scaling parameters
-            if p_lower in ['a', 'amp', 'amplitude']:
-                guess = y_max if y_min >= 0 else y_ptp / 2.0
+            if p_lower in ['a', 'amp', 'amplitude']: guess = y_max if y_min >= 0 else y_ptp / 2.0
             # Offset / Baseline parameters
-            elif p_lower in ['c', 'y0', 'offset', 'base', 'baseline']:
-                guess = y_min if y_min > 0 else y_mean
+            elif p_lower in ['c', 'y0', 'offset', 'base', 'baseline']: guess = y_min if y_min > 0 else y_mean
             # X-Shift / Center parameters
-            elif p_lower in ['x0', 'mu', 'center', 'xc', 'shift']:
-                guess = x_mean
+            elif p_lower in ['x0', 'mu', 'center', 'xc', 'shift']: guess = x_peak
             # Width / Time-constant parameters
-            elif p_lower in ['w', 'width', 'sigma', 'tau', 'gamma']:
-                guess = x_std
+            elif p_lower in ['w', 'width', 'sigma', 'tau', 'gamma']: guess = x_std
             # Frequency parameters
-            elif p_lower in ['b', 'freq', 'frequency', 'omega']:
-                guess = 1.0 / x_std if x_std != 0 else 1.0
-            # Exponents (like your 'alpha') should safely default to 1.0 to prevent explosions!
-            elif p_lower in ['alpha', 'beta', 'n', 'm', 'power', 'deg', 'degree']:
-                guess = 1.0
+            elif p_lower in ['b', 'freq', 'frequency', 'omega']: guess = 1.0 / x_std if x_std != 0 else 1.0
+            
+            # --- NEW: Catch the normalisation constant ---
+            elif p_lower == 'x_norm': guess = np.max(np.abs(x)) if np.max(np.abs(x)) != 0 else 1.0
+            # ---------------------------------------------
+            
+            elif len(p_lower) <= 2: 
+                guess = 0.0 # Prevents X^100 from causing an instant mathematical overflow!
             # Absolute fallback
             else:
                 guess = 1.0
@@ -451,7 +966,8 @@ class CustomFitDialog(QDialog):
             self.param_configs[p]["val"].setText(f"{guess:.4g}")
             self.param_configs[p]["val"].blockSignals(False)
 
-        # Force the phantom curve to update instantly with these new starting points
+        # --- FIX 3: Resume updates and trigger exactly ONE redraw ---
+        self.suspend_updates = False
         self._draw_live_preview()
         self._check_boxes_filled()
 
@@ -467,7 +983,7 @@ class CustomFitDialog(QDialog):
                 
         res = self.parent_gui._get_all_plotted_xy(aux_cols=self.used_cols, apply_selection=False)
         if len(res) < 4 or len(res[0]) == 0: return
-        x_full, _, aux_dict, _ = res
+        x_full, y_full, aux_dict, _ = res
         
         import numpy as np
         sort_idx = np.argsort(x_full)
@@ -505,32 +1021,67 @@ class CustomFitDialog(QDialog):
             if yfit.ndim == 0:
                 yfit = np.full_like(xfit, float(yfit))
             
+            # --- SMART CLIP: Keep numbers relative to screen size ---
+            y_max, y_min = np.nanmax(y_full), np.nanmin(y_full)
+            y_span = abs(y_max - y_min) or 1.0
+            safe_max = y_max + (y_span * 50)
+            safe_min = y_min - (y_span * 50)
+            
+            yfit = np.nan_to_num(yfit, nan=0.0, posinf=safe_max, neginf=safe_min)
+            yfit = np.clip(yfit, safe_min, safe_max)
+            # -------------------------------------------------------
+            
             import pyqtgraph as pg
             from PyQt5.QtCore import Qt
+            
             if not hasattr(self.parent_gui, 'phantom_curve'):
-                self.parent_gui.phantom_curve = pg.PlotCurveItem(pen=pg.mkPen("m", width=3, style=Qt.DotLine))
+                # --- FIX: Enable hardware clipping to stop dashed line lag ---
+                self.parent_gui.phantom_curve = pg.PlotCurveItem(
+                    pen=pg.mkPen("m", width=3, style=Qt.DotLine),
+                    clipToView=True, autoDownsample=True
+                )
                 self.parent_gui.plot_widget.addItem(self.parent_gui.phantom_curve)
+                # -------------------------------------------------------------
             
             self.parent_gui.phantom_curve.setData(xfit, yfit)
             self.parent_gui.phantom_curve.setVisible(True)
+            self.done_btn.setEnabled(True) 
+            
         except Exception as e:
-            pass # Allows user to keep typing without throwing hard UI errors
+            self.done_btn.setEnabled(False)
+            pass
 
     def run_optimization(self):
-        from PyQt5.QtWidgets import QApplication, QMessageBox
-        import numpy as np
-        
         if not self.is_valid or not self.parameters: return
-        res = self.parent_gui._get_all_plotted_xy(aux_cols=self.used_cols, apply_selection=True)
-        if len(res) < 4 or len(res[0]) == 0: return
-        x, y, aux_dict, _ = res
+        self._is_optimizing = True
+        self._opt_cycles = 0 # <--- Set counter to 0
+        
+        self.optimize_btn.setVisible(False)
+        self.stop_opt_btn.setVisible(True)
+        self.done_btn.setEnabled(False)
+        self.auto_guess_btn.setEnabled(False)
+        
+        self._run_opt_step()
 
+    def stop_optimization(self):
+        self._is_optimizing = False
+        self.optimize_btn.setVisible(True)
+        self.stop_opt_btn.setVisible(False)
+        self.done_btn.setEnabled(True)
+        self.auto_guess_btn.setEnabled(True)
+
+    def _run_opt_step(self):
+        if not getattr(self, '_is_optimizing', False): return
+            
+        import numpy as np
+        res = self.parent_gui._get_all_plotted_xy(aux_cols=self.used_cols, apply_selection=True)
+        if len(res) < 4 or len(res[0]) == 0: 
+            self.stop_optimization()
+            return
+            
+        x, y, aux_dict, _ = res
         safe_dict = aux_dict if aux_dict is not None else {}
         aux_calc = {c: np.asarray(safe_dict.get(c, np.zeros_like(x))) for c in self.used_cols}
-
-        self.optimize_btn.setText("Optimizing...")
-        self.optimize_btn.setEnabled(False)
-        QApplication.processEvents()
 
         param_config = {}
         old_vals = []
@@ -552,12 +1103,16 @@ class CustomFitDialog(QDialog):
             with np.errstate(all='ignore'):
                 res_arr = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
             if res_arr.ndim == 0: res_arr = np.full_like(x_val, float(res_arr))
-            
             res_arr[~np.isfinite(res_arr)] = 1e12 
             return res_arr
-
-        try:
-            final_params = self.parent_gui._execute_universal_fit(custom_model, self.parameters, param_config, x, y)
+            
+        # Spawn the thread
+        self.opt_worker = LocalWorker(self.parent_gui._execute_universal_fit, custom_model, self.parameters, param_config, x, y)
+        
+        def on_success(result):
+            final_params, pcov = result
+            self.latest_pcov = pcov  # Save the raw matrix
+            self._opt_cycles += 1
             
             new_vals = []
             for i, p in enumerate(self.parameters):
@@ -569,15 +1124,30 @@ class CustomFitDialog(QDialog):
             
             self._draw_live_preview()
             
-            # --- THE NEW SUCCESS WINDOW ---
+            # 1. Check for mathematical convergence
             if old_vals and np.allclose(old_vals, new_vals, rtol=1e-5):
-                QMessageBox.information(self, "Optimization Complete", "The parameters are fully optimized and did not change further.\n\nThe algorithm has found the best mathematical fit for your initial guesses.")
+                self.stop_optimization()
+                QMessageBox.information(self, "Optimization Complete", "The parameters have converged on the optimal fit.")
+                
+            # 2. Check if we hit the patience limit
+            elif self._opt_cycles >= 30:
+                self.stop_optimization()
+                self._swarm_count = 1 # Force the next swarm to be Localised
+                self.auto_guess_btn.setText("✨ Targeted Swarm (Local)")
+                QMessageBox.warning(self, "Optimization Halted", "The local solver has reached its maximum iteration limit without fully converging.\n\nTry clicking 'Targeted Swarm (Local)' to dynamically bump the parameters out of this local trap!")
+                
+            # 3. Otherwise, keep looping
+            elif getattr(self, '_is_optimizing', False):
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(10, self._run_opt_step)
+                
+        def on_err(err_str):
+            self.stop_optimization()
+            QMessageBox.critical(self, "Failed", f"Math Error or Failed Convergence.\n\nDetails: {err_str}")
 
-        except Exception as e:
-            QMessageBox.critical(self, "Failed", f"Math Error or Failed Convergence.\n\nCheck your initial guesses!\n\nDetails: {e}")
-
-        self.optimize_btn.setText("Optimize Parameters")
-        self.optimize_btn.setEnabled(True)
+        self.opt_worker.finished.connect(on_success)
+        self.opt_worker.error.connect(on_err)
+        self.opt_worker.start()
 
     def open_constants(self):
         dlg = ConstantsDialog(self)
@@ -681,6 +1251,13 @@ class CustomFitDialog(QDialog):
         except Exception: return False, py_equation
 
     def update_preview(self):
+        if getattr(self, 'suspend_updates', False): return
+        
+        # --- NEW: Reset swarm tracker when equation changes ---
+        self._swarm_count = 0
+        if hasattr(self, 'auto_guess_btn'):
+            self.auto_guess_btn.setText("✨ Auto-Guess (Global Search)")
+        # ----------------------------------------------------
         raw_text = self.equation_input.toPlainText().strip()
         if not raw_text:
             self.preview_label.setText(""); self.is_valid = False
@@ -760,12 +1337,12 @@ class CustomFitDialog(QDialog):
             f_size, p_size = ("15px", "130%") if is_exp else ("22px", "130%")
             if '/' not in text:
                 res = tokenize_to_horizontal(text, f_size)
-                return f"<table style='display:inline-table; border-collapse:collapse; margin:0;'><tr><td style='vertical-align:middle; font-size:{f_size}; padding:0; color:#222;'>(</td><td style='vertical-align:middle; padding:0;'>{res}</td><td style='vertical-align:middle; font-size:{f_size}; padding:0; color:#222;'>)</td></tr></table>" if has_parens else res
+                return f"<table style='display:inline-table; border-collapse:collapse; margin:0;'><tr><td style='vertical-align:middle; font-size:{f_size}; padding:0; color:{theme.fg};'>(</td><td style='vertical-align:middle; padding:0;'>{res}</td><td style='vertical-align:middle; font-size:{f_size}; padding:0; color:{theme.fg};'>)</td></tr></table>" if has_parens else res
             parts = text.split('/')
             res = tokenize_to_horizontal(parts[0].strip() or "&nbsp;", f_size)
             for p in parts[1:]:
                 den = tokenize_to_horizontal(p.strip() or "&nbsp;", f_size)
-                res = f"<table style='display:inline-table; vertical-align:middle; border-collapse:collapse; margin: 0 1px;'><tr><td rowspan='2' style='vertical-align:middle; font-size:{p_size}; padding: 0; color:#222;'>{'(' if has_parens else ''}</td><td style='border-bottom:1px solid black; padding: 0 2px; text-align:center; vertical-align:bottom; font-size:{f_size};'>{res}</td><td rowspan='2' style='vertical-align:middle; font-size:{p_size}; padding: 0; color:#222;'>{')' if has_parens else ''}</td></tr><tr><td style='padding: 0 2px; text-align:center; vertical-align:top; font-size:{f_size};'>{den}</td></tr></table>"
+                res = f"<table style='display:inline-table; vertical-align:middle; border-collapse:collapse; margin: 0 1px;'><tr><td rowspan='2' style='vertical-align:middle; font-size:{p_size}; padding: 0; color:{theme.fg};'>{'(' if has_parens else ''}</td><td style='border-bottom:1px solid {theme.fg}; padding: 0 2px; text-align:center; vertical-align:bottom; font-size:{f_size};'>{res}</td><td rowspan='2' style='vertical-align:middle; font-size:{p_size}; padding: 0; color:{theme.fg};'>{')' if has_parens else ''}</td></tr><tr><td style='padding: 0 2px; text-align:center; vertical-align:top; font-size:{f_size};'>{den}</td></tr></table>"
                 has_parens = False
             return res
 
@@ -795,6 +1372,9 @@ class CustomFitDialog(QDialog):
         self._check_boxes_filled()
 
     def run_global_search(self):
+        import numpy as np
+        from PyQt5.QtWidgets import QProgressDialog, QMessageBox
+        
         if not self.is_valid or not self.parameters: return
         
         res = self.parent_gui._get_all_plotted_xy(aux_cols=self.used_cols, apply_selection=True)
@@ -809,51 +1389,107 @@ class CustomFitDialog(QDialog):
             else:
                 safe_aux[c] = np.zeros_like(x)
 
-        self.auto_guess_btn.setText("Swarming...")
-        self.auto_guess_btn.setEnabled(False)
-        self.optimize_btn.setEnabled(False)
-        QApplication.processEvents()
+        # 1. Setup the UI Percentage Bar
+        self.swarm_progress = QProgressDialog("Running Swarm Search... This may take a while.", "Cancel", 0, 100, self)
+        self.swarm_progress.setWindowTitle("Swarming")
+        self.swarm_progress.setModal(True)
+        self.swarm_progress.setMinimumDuration(0)
+        self.swarm_progress.setValue(0)
 
         def norm_func(v):
             arr = np.asarray(v, dtype=np.float64)
-            m = np.max(arr)
+            m = np.max(np.abs(arr)) # Absolute max to bound between -1 and 1
             return arr / m if m != 0 else arr
 
-        def objective(params):
-            env = {"np": np, "e": np.e, "pi": np.pi, "x": x, "data_dict": safe_aux, "norm": norm_func}
-            for i, p in enumerate(self.parameters): env[p] = params[i]
-            try:
-                y_pred = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
-                if y_pred.ndim == 0: y_pred = np.full_like(x, float(y_pred))
-                return np.sum((y - y_pred)**2)
-            except:
-                return np.inf
+        # 2. Package the Swarm into a background function
+        def run_swarm():
+            from scipy.optimize import differential_evolution
+            import warnings
+            
+            def objective(params):
+                env = {"np": np, "e": np.e, "pi": np.pi, "x": x, "data_dict": safe_aux, "norm": norm_func}
+                for i, p in enumerate(self.parameters): env[p] = params[i]
+                try:
+                    with np.errstate(all='ignore'):
+                        y_pred = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
+                    if y_pred.ndim == 0: y_pred = np.full_like(x, float(y_pred))
+                    return np.sum((y - y_pred)**2)
+                except:
+                    return np.inf
 
-        from scipy.optimize import differential_evolution
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            try:
-                # Set wide bounds for the swarm (-10,000 to +10,000 for each parameter)
-                bounds = [(-10000.0, 10000.0) for _ in self.parameters]
-                result = differential_evolution(objective, bounds, maxiter=1000, popsize=15, tol=0.01)
+            max_iterations = 500
+            current_iter = [0]
+
+            def swarm_callback(xk, convergence=0.0):
+                current_iter[0] += 1
+                pct = int((current_iter[0] / max_iterations) * 100)
                 
-                if result.success:
-                    for i, p in enumerate(self.parameters):
-                        if self.param_configs[p]["mode"].currentText() == "Auto":
-                            self.param_configs[p]["val"].blockSignals(True)
-                            self.param_configs[p]["val"].setText(f"{result.x[i]:.6g}")
-                            self.param_configs[p]["val"].blockSignals(False)
-                    self._draw_live_preview()
-                else:
-                    QMessageBox.warning(self, "Swarm Failed", "The global search could not find a reasonable fit. You may need to guess manually!")
-                    
-            except Exception as e:
-                QMessageBox.critical(self, "Search Error", f"The global search encountered a fatal math error:\n\n{e}")
+                if hasattr(self, 'swarm_worker'):
+                    self.swarm_worker.progress.emit(pct)
+                
+                if self.swarm_progress.wasCanceled():
+                    return True 
 
-        self.auto_guess_btn.setText("✨ Auto-Guess (Global Search)")
-        self.auto_guess_btn.setEnabled(True)
-        self.optimize_btn.setEnabled(True)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                
+                bounds = []
+                is_targeted = getattr(self, '_swarm_count', 0) > 0
+                
+                for p in self.parameters:
+                    is_auto = self.param_configs[p]["mode"].currentText() == "Auto"
+                    try: current_val = float(self.param_configs[p]["val"].text())
+                    except: current_val = 1.0
+                    
+                    if not is_auto:
+                        margin = 1e-8
+                        bounds.append((current_val - margin, current_val + margin))
+                    elif not is_targeted:
+                        bounds.append((-10000.0, 10000.0))
+                    else:
+                        margin = max(abs(current_val) * 0.5, 2.0)
+                        bounds.append((current_val - margin, current_val + margin))
+                
+                pop = max(5, min(15, 200 // max(1, len(self.parameters))))
+                
+                result = differential_evolution(objective, bounds, maxiter=max_iterations, popsize=pop, tol=0.01, callback=swarm_callback)
+                
+                if not result.success and not self.swarm_progress.wasCanceled():
+                    if "Maximum number of iterations" not in result.message:
+                        raise Exception("Swarm failed to converge.")
+                return result.x
+
+        # 3. CRITICAL: Initialize the Worker Thread
+        self.swarm_worker = LocalWorker(run_swarm)
+
+        # 4. Define Callbacks
+        def on_success(best_params):
+            self.swarm_progress.accept()
+            
+            # Update the UI state
+            self._swarm_count += 1
+            self.auto_guess_btn.setText("✨ Targeted Swarm (Local)")
+            
+            for i, p in enumerate(self.parameters):
+                if self.param_configs[p]["mode"].currentText() == "Auto":
+                    self.param_configs[p]["val"].blockSignals(True)
+                    self.param_configs[p]["val"].setText(f"{best_params[i]:.6g}")
+                    self.param_configs[p]["val"].blockSignals(False)
+                    
+            self._draw_live_preview()
+            QMessageBox.information(self, "Swarm Complete", "Global search finished! Check the preview.")
+
+        def on_err(err_str):
+            self.swarm_progress.accept()
+            QMessageBox.warning(self, "Swarm Failed", f"The search could not find a reasonable fit:\n{err_str}")
+
+        # 5. Wire Everything Together
+        self.swarm_worker.finished.connect(on_success)
+        self.swarm_worker.error.connect(on_err)
+        self.swarm_worker.progress.connect(self.swarm_progress.setValue)
+        self.swarm_progress.canceled.connect(self.swarm_worker.terminate)
+        
+        self.swarm_worker.start()
 
     def handle_done(self):
         if not self.is_valid:
@@ -870,7 +1506,10 @@ class CustomFitDialog(QDialog):
             try: val = float(controls["val"].text())
             except: val = 1.0
             final_config[p] = {"mode": controls["mode"].currentText(), "value": val}
-        return self.equation_input.toPlainText().strip(), self.parsed_equation, self.html_equation, self.used_cols, self.parameters, final_config
+            
+        # Pass the raw covariance matrix out instead of calculated stats
+        pcov = getattr(self, 'latest_pcov', None)
+        return self.equation_input.toPlainText().strip(), self.parsed_equation, self.html_equation, self.used_cols, self.parameters, final_config, pcov
 
 
 class MultiFitManagerDialog(QDialog):
@@ -970,14 +1609,94 @@ class FitDataToFunctionWindow(QMainWindow):
         layout.addWidget(self.plot_widget, 1)
 
     def load_function(self):
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import numpy as np
+        import re
+
         fname, _ = QFileDialog.getOpenFileName(
             self, "Load Function", "",
             "Text files (*.txt)"
         )
         if not fname: return
+
         try:
-            self.func = load_function_from_file(fname)
-        except Exception:
+            with open(fname, 'r') as f:
+                lines = [l.strip() for l in f.readlines() if l.strip()]
+
+            if not lines: return
+
+            # 1. The Metadata Gatekeeper
+            type_line = lines[0]
+            if type_line.startswith("3D:"):
+                QMessageBox.warning(self, "Format Mismatch", "This is a 3D surface function and cannot be loaded into the 2D data fitter.")
+                return
+
+            func_type = type_line.lower()
+
+            # 2. Compile Common Functions into Callables
+            if func_type == "polynomial":
+                coeffs = [float(x) for x in lines[2:]]
+                self.func = np.poly1d(coeffs)
+
+            elif func_type == "logarithmic":
+                base_str = lines[1].split(":")[1].strip()
+                base = np.e if base_str.lower() == 'e' else float(base_str)
+                params = [float(x) for x in lines[2:]]
+                self.func = lambda x, a=params[0], c=params[1], b=base: a * np.log(x) / np.log(b) + c
+
+            elif func_type == "exponential":
+                params = [float(x) for x in lines[1:]]
+                self.func = lambda x, a=params[0], b=params[1], c=params[2]: a * np.exp(b * x) + c
+
+            elif func_type == "gaussian":
+                params = [float(x) for x in lines[1:]]
+                self.func = lambda x, A=params[0], mu=params[1], sig=params[2]: A * np.exp(-(x - mu)**2 / (2 * sig**2))
+
+            elif func_type == "lorentzian":
+                params = [float(x) for x in lines[1:]]
+                self.func = lambda x, A=params[0], x0=params[1], gam=params[2]: A / (1 + ((x - x0) / gam)**2)
+
+            # 3. Compile Custom Functions Safely
+            elif func_type == "custom":
+                raw_eq = lines[1]
+                p_names = [p.strip() for p in lines[2].split(",") if p.strip()]
+                p_vals = [float(x) for x in lines[3:]]
+                
+                # Convert the raw equation into a numpy-safe Python string
+                py_eq = raw_eq.replace('^', '**')
+                math_funcs = ['arcsinh','arccosh','arctanh','arcsin','arccos','arctan','sinh','cosh','tanh','sin','cos','tan', 'exp', 'log10', 'log2', 'log', 'abs']
+                for mf in math_funcs:
+                    py_eq = re.sub(r'\b' + mf + r'\s*\(', f'np.{mf}(', py_eq, flags=re.IGNORECASE)
+                py_eq = re.sub(r'\bln\s*\(', 'np.log(', py_eq, flags=re.IGNORECASE)
+                
+                # Replace Physics Constants natively
+                def replace_const(m):
+                    c_key = m.group(1)
+                    return f"({PHYSICS_CONSTANTS[c_key]['value']})" if c_key in PHYSICS_CONSTANTS else m.group(0)
+                py_eq = re.sub(r'\{\\(.*?)\}', replace_const, py_eq)
+                
+                # Strip curly brackets from parameters if they exist
+                for p in p_names: py_eq = py_eq.replace(f"{{{p}}}", p)
+
+                # Create the isolated evaluation environment
+                def custom_callable(x_val):
+                    env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val}
+                    for i, name in enumerate(p_names): env[name] = p_vals[i]
+                    res = np.asarray(eval(py_eq, {"__builtins__": {}}, env), dtype=np.float64)
+                    if res.ndim == 0: res = np.full_like(x_val, float(res))
+                    return res
+                    
+                self.func = custom_callable
+
+            else:
+                QMessageBox.warning(self, "Unknown Format", f"Unrecognised function type: {type_line}")
+                return
+
+            QMessageBox.information(self, "Success", f"Successfully loaded {type_line.capitalize()} function.")
+
+        except Exception as e:
+            import traceback
+            QMessageBox.critical(self, "Load Error", f"Failed to parse function file:\n{e}\n\n{traceback.format_exc()}")
             self.func = None
 
     def plot(self):
