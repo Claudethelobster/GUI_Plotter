@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTextEdit, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView,
     QFormLayout, QComboBox, QLineEdit, QWidget, QCheckBox, QTabWidget, QGroupBox,
-    QTableView, QScrollArea, QMessageBox, QSpinBox
+    QTableView, QScrollArea, QMessageBox, QSpinBox, QListWidget
 )
 
 from core.constants import PHYSICS_CONSTANTS
@@ -965,3 +965,53 @@ class CreateColumnDialog(QDialog):
 
     def get_equation_data(self):
         return self.col_name_edit.text(), self.equation_input.toPlainText()
+    
+class TemplateSelectionDialog(QDialog):
+    def __init__(self, signatures, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("EggPlot - Select Data Template")
+        self.setMinimumWidth(550)
+        layout = QVBoxLayout(self)
+        
+        layout.addWidget(QLabel("Multiple file formats were detected in this folder.\nSelect which group of files you want to load as sweeps:"))
+        
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget)
+        
+        self.sig_mapping = []
+        
+        sorted_sigs = sorted(signatures.items(), key=lambda x: len(x[1]), reverse=True)
+        
+        for i, (sig, files) in enumerate(sorted_sigs):
+            if isinstance(sig, tuple):
+                sig_str = ", ".join(sig)
+            else:
+                sig_str = f"{sig} columns (No Headers)"
+                
+            if len(sig_str) > 75: 
+                sig_str = sig_str[:72] + "..."
+                
+            item_text = f"Group {i+1}: {len(files)} files -> Headers: [{sig_str}]"
+            if i == 0: 
+                item_text += " ⭐ (Auto / Recommended)"
+                
+            self.list_widget.addItem(item_text)
+            self.sig_mapping.append(sig)
+            
+        self.list_widget.setCurrentRow(0)
+        
+        btn_box = QHBoxLayout()
+        ok_btn = QPushButton("Load Selected Group")
+        ok_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        ok_btn.clicked.connect(self.accept)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        
+        btn_box.addStretch()
+        btn_box.addWidget(ok_btn)
+        btn_box.addWidget(cancel_btn)
+        layout.addLayout(btn_box)
+        
+    def get_selected_signature(self):
+        return self.sig_mapping[self.list_widget.currentRow()]
