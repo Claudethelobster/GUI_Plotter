@@ -5,7 +5,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QComboBox, 
     QPushButton, QHBoxLayout, QSpinBox, QDoubleSpinBox, QColorDialog,
-    QLabel
+    QLabel, QCheckBox, QTableWidget, QHeaderView, QTableWidgetItem, QLineEdit
 )
 from PyQt5.QtGui import QColor
 from core.theme import theme
@@ -294,3 +294,273 @@ class TraceSettingsDialog(QDialog):
             "symbol_size": self.sym_size_spin.value()
         })
         return self.style_data
+
+try:
+    import pyqtgraph.opengl as gl
+    from PyQt5.QtGui import QPainter, QTextDocument, QColor, QVector3D
+    OPENGL_AVAILABLE = True
+    
+    # --- NEW: CUSTOM 3D HTML RENDERER ---
+    class GLRichTextItem(gl.GLGraphicsItem.GLGraphicsItem):
+        def __init__(self, pos=(0,0,0), text='', font=None, color=(255,255,255,255)):
+            super().__init__()
+            self.pos = pos
+            self.text = text
+            self.font = font
+            self.color = color
+
+        def paint(self):
+            self.setupGLState()
+            view = self.view()
+            painter = QPainter(view)
+            painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+            
+            # --- CRITICAL FIX: PyQtGraph 0.13+ Compatibility ---
+            try:
+                # Extract the raw integers from the QRect object into a tuple
+                v_rect = view.rect()
+                rect_tuple = (v_rect.x(), v_rect.y(), v_rect.width(), v_rect.height())
+                
+                # Pass the tuple to the newer pyqtgraph engine
+                proj = view.projectionMatrix(region=rect_tuple, viewport=rect_tuple)
+            except TypeError:
+                # Fallback for older versions
+                proj = view.projectionMatrix()
+                
+            pr = proj * view.viewMatrix() * self.transform()
+            # ---------------------------------------------------
+            
+            p = pr.map(QVector3D(*self.pos))
+            
+            # Hide text if it rotates behind the camera
+            if p.z() > 1.0 or p.z() < -1.0:
+                painter.end()
+                return
+            
+            x = (p.x() + 1.0) * view.width() * 0.5
+            y = (1.0 - p.y()) * view.height() * 0.5
+            
+            # Render HTML using the UI's internal web-engine
+            doc = QTextDocument()
+            if self.font: doc.setDefaultFont(self.font)
+            
+            c = QColor(*self.color) if isinstance(self.color, (tuple, list)) else self.color
+            doc.setHtml(f"<div style='color: {c.name()}; white-space: nowrap;'>{self.text}</div>")
+            
+            # Center the text exactly on the point
+            size = doc.size()
+            painter.translate(x - size.width() / 2, y - size.height() / 2)
+            doc.drawContents(painter)
+            painter.end()
+    # ------------------------------------
+except Exception:
+    OPENGL_AVAILABLE = False
+    
+class LegendCustomizationDialog(QDialog):
+    def __init__(self, main_window, entries, current_aliases, group_sweeps):
+        super().__init__(main_window)
+        self.setWindowTitle("Customize Legend")
+        self.setMinimumSize(650, 500)
+        self.main_window = main_window
+        self.entries = entries 
+        self.aliases = current_aliases.copy()
+        
+        layout = QVBoxLayout(self)
+        
+        self.group_cb = QCheckBox("Group multiple sweeps into a single legend entry")
+        self.group_cb.setChecked(group_sweeps)
+        self.group_cb.setStyleSheet("font-weight: bold; color: #0055ff;")
+        layout.addWidget(self.group_cb)
+        
+        layout.addWidget(QLabel("<b>Customize Labels:</b> <i>(Leave blank to use default. Use ^ for superscripts and _ for subscripts.)</i>"))
+        
+        self.table = QTableWidget()
+        self.table.setColumnCount(2)
+        self.table.setHorizontalHeaderLabels(["Original Smart Name", "Custom Override"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        layout.addWidget(self.table)
+        
+        layout.addWidget(QLabel("<b>Live Preview:</b>"))
+        self.preview_widget = pg.GraphicsLayoutWidget()
+        self.preview_widget.setFixedHeight(150)
+        
+        bg_col = main_window.bg_color_combo.currentText()
+        self.preview_widget.setBackground(bg_col if bg_col != "Transparent" else "w")
+        
+        # Import the new custom legend locally to avoid circular dependencies
+        from ui.custom_widgets import CustomLegendItem
+        self.preview_legend = CustomLegendItem(offset=(10, 10))
+        self.preview_legend.setParentItem(self.preview_widget.ci)
+        layout.addWidget(self.preview_widget)
+        
+        btn_box = QHBoxLayout()
+        btn_ok = QPushButton("Apply")
+        btn_ok.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        btn_cancel = QPushButton("Cancel")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+        btn_box.addStretch()
+        btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_ok)
+        layout.addLayout(btn_box)
+        
+        self._populate_table()
+        self.table.itemChanged.connect(self._on_table_changed)
+        self.group_cb.stateChanged.connect(self._update_preview)
+        self._update_preview()
+
+    def _populate_table(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(self.entries))
+        for i, entry in enumerate(self.entries):
+            def_item = QTableWidgetItem(entry["base_name"])
+            def_item.setFlags(def_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(i, 0, def_item)
+            
+            custom_text = self.aliases.get(entry["sig_key"], "")
+            cust_item = QTableWidgetItem(custom_text)
+            self.table.setItem(i, 1, cust_item)
+        self.table.blockSignals(False)
+
+    def _on_table_changed(self, item):
+        if item.column() == 1:
+            row = item.row()
+            sig_key = self.entries[row]["sig_key"]
+            text = item.text().strip()
+            if text: self.aliases[sig_key] = text
+            else: self.aliases.pop(sig_key, None)
+            self._update_preview()
+
+    def _update_preview(self):
+        self.preview_legend.clear()
+        import re
+        is_grouped = self.group_cb.isChecked()
+        seen_groups = set()
+
+        for entry in self.entries:
+            if is_grouped:
+                parts = entry["sig_key"].split("_")
+                group_key = f"{parts[0]}_GROUPED_{parts[2]}_{parts[3]}" if len(parts) >= 4 else entry["sig_key"]
+                if group_key in seen_groups: continue
+                seen_groups.add(group_key)
+                
+                base_name = re.sub(r" \(Sweep \w+\)", "", entry["base_name"])
+                display_text = self.aliases.get(group_key, base_name)
+            else:
+                display_text = self.aliases.get(entry["sig_key"], entry["base_name"])
+            
+            # Mini HTML parser for preview
+            html_text = re.sub(r'\^([\w\.\-]+)', r'<sup>\1</sup>', display_text)
+            html_text = re.sub(r'_([\w\.\-]+)', r'<sub>\1</sub>', html_text)
+            
+            dummy_plot = pg.PlotDataItem(pen=entry.get("pen", 'k'), symbol=entry.get("symbol", None), symbolBrush=entry.get("brush", None))
+            self.preview_legend.addItem(dummy_plot, html_text)
+            
+    def get_result(self):
+        return self.aliases, self.group_cb.isChecked()
+    
+class RichTextAxisLabelDialog(QDialog):
+    def __init__(self, orientation, current_raw_text, main_window):
+        super().__init__(main_window)
+        self.setWindowTitle(f"Edit {orientation.capitalize()} Axis Label")
+        self.setMinimumWidth(450)
+        self.main_window = main_window
+        self.parsed_html = current_raw_text
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("<b>Enter Custom Axis Label:</b>"))
+        layout.addWidget(QLabel("<i>Tip: Use ^ for superscripts (m/s^2), _ for subscripts (x_0), and {alpha} for Greek.</i>"))
+
+        input_lay = QHBoxLayout()
+        self.input_edit = QLineEdit(current_raw_text)
+        self.input_edit.textChanged.connect(self.update_preview)
+        input_lay.addWidget(self.input_edit)
+
+        self.const_btn = QPushButton("✨ Insert Constant")
+        self.const_btn.clicked.connect(self.open_constants)
+        input_lay.addWidget(self.const_btn)
+        layout.addLayout(input_lay)
+
+        layout.addSpacing(10)
+        layout.addWidget(QLabel("<b>Live Preview:</b>"))
+
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignCenter)
+
+        # --- Pull exact font & color from layout settings ---
+        font_family = main_window.font_family_combo.currentFont().family()
+        try: label_size = int(main_window.label_fontsize_edit.text())
+        except ValueError: label_size = 14
+        
+        bg_color = main_window.bg_color_combo.currentText()
+        if bg_color == "Black":
+            box_bg, text_color = "#222", "white"
+        else:
+            box_bg, text_color = "white", "black"
+
+        self.preview_label.setStyleSheet(f"background-color: {box_bg}; color: {text_color}; border: 1px solid #aaa; padding: 15px;")
+        self.preview_label.setFont(pg.QtGui.QFont(font_family, label_size))
+        layout.addWidget(self.preview_label)
+
+        btn_box = QHBoxLayout()
+        
+        clear_btn = QPushButton("Revert to Default")
+        clear_btn.setStyleSheet("color: #d90000;")
+        clear_btn.clicked.connect(self._clear_and_accept)
+        
+        ok_btn = QPushButton("Apply")
+        ok_btn.setStyleSheet("font-weight: bold; color: #0055ff; padding: 6px;")
+        ok_btn.clicked.connect(self.accept)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_box.addWidget(clear_btn)
+        btn_box.addStretch()
+        btn_box.addWidget(cancel_btn)
+        btn_box.addWidget(ok_btn)
+        layout.addLayout(btn_box)
+
+        self.update_preview(current_raw_text)
+
+    def _clear_and_accept(self):
+        self.input_edit.setText("")
+        self.accept()
+
+    def open_constants(self):
+        from ui.dialogs.data_mgmt import ConstantsDialog
+        dlg = ConstantsDialog(self)
+        if dlg.exec() == QDialog.Accepted and dlg.selected_key:
+            self.input_edit.insert(f"{{\\{dlg.selected_key}}}")
+
+    def update_preview(self, text):
+        html_text = text
+        import re
+        
+        # 1. Physics Constants
+        def const_repl(m):
+            c_key = m.group(1)
+            return PHYSICS_CONSTANTS[c_key]["html"] if c_key in PHYSICS_CONSTANTS else f"\\{{{c_key}}}"
+        html_text = re.sub(r'\{\\(.*?)\}', const_repl, html_text)
+
+        # 2. Greek Letters
+        def param_repl(m):
+            p_key = m.group(1)
+            return GREEK_MAP.get(p_key, p_key)
+        html_text = re.sub(r'\{(.*?)\}', param_repl, html_text)
+
+        # 3. Superscripts (e.g., ^2, ^-1)
+        html_text = re.sub(r'\^([\w\.\-]+)', r'<sup>\1</sup>', html_text)
+        
+        # 4. Subscripts (e.g., _0, _max)
+        html_text = re.sub(r'_([\w\.\-]+)', r'<sub>\1</sub>', html_text)
+
+        self.preview_label.setText(html_text)
+        self.parsed_html = html_text
+
+    def get_result(self):
+        return self.input_edit.text().strip(), self.parsed_html
