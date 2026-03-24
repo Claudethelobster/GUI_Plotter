@@ -4445,7 +4445,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
         if self.plot_mode == "3D":
             if not hasattr(self, 'crosshair_3d'):
-                from core.analysis_3d import Crosshair3DManager
+                from ui.dialogs.analysis_3d import Crosshair3DManager
                 self.crosshair_3d = Crosshair3DManager(self)
             self.crosshair_3d.toggle()
             
