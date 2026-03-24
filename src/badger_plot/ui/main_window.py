@@ -6083,68 +6083,8 @@ class BadgerLoopQtGraph(QMainWindow):
             self._is_plotting = False
 
     def _draw_heatmap(self, res_dict):
-        try:
-            if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
-            if not res_dict: return
-                
-            dummy_arr = np.array([0.0], dtype=np.float32)
-            for c in self.curve_pool: 
-                c.setData(x=dummy_arr, y=dummy_arr)
-                c.setVisible(False)
-            for s in self.scatter_pool: 
-                s.setData(x=dummy_arr, y=dummy_arr)
-                s.setVisible(False)
-            for eb in self.errorbar_pool: 
-                eb.setData(x=dummy_arr, y=dummy_arr, height=dummy_arr, width=dummy_arr)
-                eb.setVisible(False)
-            for ac in self.avg_error_pool: 
-                ac.setData(x=dummy_arr, y=dummy_arr, height=dummy_arr, width=dummy_arr)
-                ac.setVisible(False)
-    
-            self.legend.hide()
-            self.heatmap_item.setVisible(True) 
-            self.heatmap_image_item.setVisible(True)
-            
-            pair = self.series_data[self.plot_mode][0] if self.series_data.get(self.plot_mode) else {}
-            self.plot_widget.setLabel("bottom", pair.get("x_name", "X"))
-            self.plot_widget.setLabel("left", pair.get("y_name", "Y"))
-            
-            xlog, ylog, zlog = self.xscale.currentText() == "Log", self.yscale.currentText() == "Log", self.zscale.currentText() == "Log"
-            xbase = getattr(self, '_parse_log_base', lambda x: 10.0)(self.xbase.text())
-            ybase = getattr(self, '_parse_log_base', lambda x: 10.0)(self.ybase.text())
-            zbase = getattr(self, '_parse_log_base', lambda x: 10.0)(self.zbase.text())
-            
-            self.plot_widget.getAxis('bottom').set_custom_log(xlog, xbase)
-            self.plot_widget.getAxis('top').set_custom_log(xlog, xbase)
-            self.plot_widget.getAxis('left').set_custom_log(ylog, ybase)
-            self.plot_widget.getAxis('right').set_custom_log(ylog, ybase)
-            
-            self.heatmap_item.axis.setLabel(res_dict.get("z_axis_name", "Z"), color='k')
-            self.heatmap_item.axis.set_custom_log(zlog, zbase)
-            self._apply_axis_fonts()
-            
-            img_data = res_dict["img_data"]
-            x_min, x_max = res_dict["x_min"], res_dict["x_max"]
-            y_min, y_max = res_dict["y_min"], res_dict["y_max"]
-            z_min, z_max = res_dict["z_min"], res_dict["z_max"]
-            
-            self.heatmap_image_item.setImage(img_data)
-            try: self.heatmap_item.gradient.setColorMap(pg.colormap.get(self.heatmap_cmap.currentText(), source='matplotlib'))
-            except: self.heatmap_item.gradient.loadPreset('viridis')
-            
-            rect_w = x_max - x_min if x_max > x_min else 1.0
-            rect_h = y_max - y_min if y_max > y_min else 1.0
-            self.heatmap_image_item.setRect(pg.QtCore.QRectF(x_min, y_min, rect_w, rect_h))
-            
-            self.heatmap_item.setLevels(z_min, z_max)
-            self.plot_widget.autoRange(padding=0)
-            self.plot_widget.getViewBox().setLimits(xMin=x_min, xMax=x_max, yMin=y_min, yMax=y_max)
-            self.plot_widget.getViewBox().setRange(xRange=[x_min, x_max], yRange=[y_min, y_max], padding=0)
-        except Exception as e:
-            import traceback
-            QMessageBox.critical(self, "Rendering Error", f"A fatal error occurred while drawing the Heatmap.\n\n{e}\n\n{traceback.format_exc()}")
-        finally:
-            self._is_plotting = False
+        from ui.renderers.heatmap_renderer import HeatmapRenderer
+        HeatmapRenderer.draw(self, res_dict)
             
     def save_plot(self):
         # Limit export formats for 3D since OpenGL renders as a pixel buffer (no SVG support)
