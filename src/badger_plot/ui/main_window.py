@@ -5,7 +5,7 @@ import json
 import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters as pgexp
-from PyQt5.QtCore import Qt, QSettings, QTimer, QEvent
+from PyQt5.QtCore import Qt, QSettings, QTimer, QEvent, QThread, pyqtSignal
 from PyQt5.QtGui import QPalette, QColor
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout, 
@@ -362,6 +362,24 @@ class LegendCustomizationDialog(QDialog):
             
     def get_result(self):
         return self.aliases, self.group_cb.isChecked()
+
+class BackgroundWorker(QThread):
+    """Runs heavy maths and evaluations in the background to prevent GUI freezing."""
+    finished = pyqtSignal(object) 
+    error = pyqtSignal(str)
+
+    def __init__(self, func, *args):
+        super().__init__()
+        self.func = func
+        self.args = args
+
+    def run(self):
+        try:
+            result = self.func(*self.args)
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+            
 
 class BadgerLoopQtGraph(QMainWindow):
     def __init__(self):
@@ -2887,7 +2905,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 fixed_params[p] = float(param_config[p]["value"])
         
         if not free_params:
-            return [param_config[p]["value"] for p in param_names]
+            return [param_config[p]["value"] for p in param_names], None
             
         def dynamic_wrapper(x_val, *args):
             kwargs = dict(fixed_params)
@@ -2901,11 +2919,12 @@ class BadgerLoopQtGraph(QMainWindow):
         
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            # Naked SciPy execution exactly as the monolith did. No artificial traps!
-            popt, _ = curve_fit(dynamic_wrapper, x, y, p0=p0, maxfev=20000)
+            # Extract parameters and the raw covariance matrix
+            popt, pcov = curve_fit(dynamic_wrapper, x, y, p0=p0, maxfev=20000)
             
         final_params = []
         popt_idx = 0
+
         for p in param_names:
             if p in free_params:
                 final_params.append(popt[popt_idx])
@@ -2913,24 +2932,94 @@ class BadgerLoopQtGraph(QMainWindow):
             else:
                 final_params.append(fixed_params[p])
                 
-        return final_params
+        # Return ONLY the parameters and raw covariance. Heavy maths waits for the button!
+        return final_params, pcov
+    
+    def _launch_common_fit_pipeline(self, func_type, degree_text, log_base_text, param_config):
+        res = self._get_all_plotted_xy(apply_selection=True)
+        if len(res) < 4 or len(res[0]) == 0: return
+        x, y, _, pair = res
+
+        # 1. Setup the discrete percentage bar
+        from PyQt5.QtWidgets import QProgressDialog
+        self.progress_dlg = QProgressDialog(f"Fitting {func_type}...", "Cancel", 0, 100, self)
+        self.progress_dlg.setWindowTitle("Processing")
+        self.progress_dlg.setModal(True)
+        self.progress_dlg.setMinimumDuration(0) 
+        self.progress_dlg.setValue(0)
+
+        # 2. Setup the Worker
+        from ui.dialogs.fitting import CommonFitWorker
+        
+        self.common_worker = CommonFitWorker(func_type, degree_text, log_base_text, param_config, x, y)
+        self.common_worker.progress.connect(lambda val, txt: (self.progress_dlg.setValue(val), self.progress_dlg.setLabelText(txt)))
+
+        def on_success(fit_res):
+            self.progress_dlg.setValue(99)
+            
+            import pyqtgraph as pg
+            from PyQt5.QtCore import Qt
+            
+            # Handle dark mode colours
+            fit_colour = "w" if self.bg_color_combo.currentText() == "Black" else "k"
+            
+            # --- FIX: Use PlotCurveItem directly to enable hardware clipping ---
+            plot_item = pg.PlotCurveItem(
+                x=fit_res["xfit"], y=fit_res["yfit"], 
+                pen=pg.mkPen(fit_colour, width=2, style=Qt.DashLine),
+                clipToView=True, 
+                autoDownsample=True
+            )
+            self.plot_widget.addItem(plot_item)
+            # -----------------------------------------------------------------
+            
+            fit_name = f"{fit_res['display_name']} ➔ {pair['y_name']}"
+            self.fit_legend.addItem(plot_item, fit_name)
+
+            if not hasattr(self, 'active_fits'): self.active_fits = []
+            x_raw, y_raw = self._get_raw_fit_coords(fit_res["xfit"], fit_res["yfit"])
+            
+            # Build the memory object
+            active_data = {
+                "name": fit_name, "type": fit_res["type_key"], "params": fit_res["params"],
+                "callable": fit_res["callable"], "plot_item": plot_item,
+                "param_names": fit_res["param_names"], "param_config": param_config, 
+                "x_raw": x_raw, "y_raw": y_raw, "x_idx": pair['x']
+            }
+            # Add optionals
+            for k in ["equation", "degree", "base", "coeffs", "stats", "param_errs", "pcov"]:
+                if k in fit_res: active_data[k] = fit_res[k]
+
+            self.active_fits.append(active_data)
+
+            self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
+            if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
+            if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
+
+            # Annihilate the progress dialog ONLY when the plot is completely finished
+            self.progress_dlg.setValue(100)
+            self.progress_dlg.hide()
+            self.progress_dlg.deleteLater()
+
+        def on_error(err_str):
+            self.progress_dlg.hide()
+            self.progress_dlg.deleteLater()
+            from ui.dialogs.data_mgmt import CopyableErrorDialog
+            CopyableErrorDialog("Fitting Error", "Optimization failed.", "The parameters failed to converge. Try adjusting your Initial Guesses.\n\n" + err_str, self).exec()
+
+        self.common_worker.finished.connect(on_success)
+        self.common_worker.error.connect(on_error)
+        self.progress_dlg.canceled.connect(self.common_worker.terminate)
+        
+        self.common_worker.start()
 
     def open_fit_function_dialog(self):
         if not self.dataset: return
         dlg = FitFunctionDialog(self)
         if dlg.exec() != QDialog.Accepted: return
+        
         func_type, degree_text, log_base_text, param_config = dlg.get_result()
-
-        if func_type == "Polynomial":
-            try:
-                degree = int(degree_text)
-                if degree < 0: raise ValueError
-            except ValueError: return
-            self.fit_polynomial(degree, param_config)
-        elif func_type == "Logarithmic": self.fit_logarithmic(log_base_text, param_config)
-        elif func_type == "Exponential": self.fit_exponential(param_config)
-        elif func_type == "Gaussian": self.fit_gaussian(param_config)
-        elif func_type == "Lorentzian": self.fit_lorentzian(param_config)
+        self._launch_common_fit_pipeline(func_type, degree_text, log_base_text, param_config)
             
     def open_custom_fit_dialog(self):
         from PyQt5.QtWidgets import QDialog
@@ -2943,7 +3032,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
         if hasattr(self, 'phantom_curve'): self.phantom_curve.setVisible(False)
         
-        raw_eq, py_eq, html_eq, used_cols, param_names, param_config = dlg.get_result()
+        raw_eq, py_eq, html_eq, used_cols, param_names, param_config, pcov = dlg.get_result()
         
         res_full = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=False)
         if len(res_full) < 4 or len(res_full[0]) == 0: return
@@ -2956,36 +3045,20 @@ class BadgerLoopQtGraph(QMainWindow):
         safe_aux_full = {}
         for c in used_cols:
             safe_aux_full[c] = safe_dict.get(c, np.zeros_like(x_full))
-        # -----------------
+            
+        # --- FIX 1: EXTRACT FINAL PARAMS EXACTLY AS SHOWN IN THE UI ---
+        final_params = [param_config[p]["value"] for p in param_names]
         
-        if getattr(self, 'selected_indices', set()):
-            idx = sorted(list(self.selected_indices))
-            valid_idx = [i for i in idx if i < len(x_full)]
-            x_calc = x_full[valid_idx]
-            y_calc = y_full[valid_idx]
-            aux_calc = {c: safe_aux_full[c][valid_idx] for c in used_cols}
-        else:
-            x_calc = x_full
-            y_calc = y_full
-            aux_calc = safe_aux_full
+        # 1. Set up the pulsing Progress Bar popup for evaluation only
+        from PyQt5.QtWidgets import QProgressDialog
+        self.progress_dlg = QProgressDialog("Finalising custom fit... Please wait.", "Cancel", 0, 0, self)
+        self.progress_dlg.setWindowTitle("Processing")
+        self.progress_dlg.setModal(True)
+        self.progress_dlg.setMinimumDuration(0) 
         
-        def custom_model_calc(x_val, *args):
-            env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "data_dict": aux_calc}
-            for i, p in enumerate(param_names): env[p] = args[i]
-            res_arr = np.asarray(eval(py_eq, {"__builtins__": {}}, env), dtype=np.float64)
-            if res_arr.ndim == 0: res_arr = np.full_like(x_val, float(res_arr))
-            return res_arr
-
-        try:
-            final_params = self._execute_universal_fit(custom_model_calc, param_names, param_config, x_calc, y_calc)
-        except Exception as e:
-            CopyableErrorDialog("Fitting Error", "Optimization failed.", f"{e}", self).exec()
-            return
-
         sort_idx = np.argsort(x_full)
         x_sorted = x_full[sort_idx]
         
-        # --- FIX: Smooth Cubic Spline Interpolation for Auxiliary Columns ---
         from scipy.interpolate import make_interp_spline
         x_unique, unique_idx = np.unique(x_sorted, return_index=True)
         xfit = np.linspace(x_unique[0], x_unique[-1], 500)
@@ -2998,7 +3071,6 @@ class BadgerLoopQtGraph(QMainWindow):
                 smooth_aux[c] = spline(xfit)
             else:
                 smooth_aux[c] = np.interp(xfit, x_unique, y_unq)
-        # --------------------------------------------------------------------
         
         def plot_model(x_arr, aux_arrs, *args):
             env = {"np": np, "e": np.e, "pi": np.pi, "x": x_arr, "data_dict": aux_arrs}
@@ -3007,31 +3079,129 @@ class BadgerLoopQtGraph(QMainWindow):
             if res_arr.ndim == 0: res_arr = np.full_like(x_arr, float(res_arr))
             return res_arr
             
-        yfit = plot_model(xfit, smooth_aux, *final_params)
+        # --- NEW: Strictly Lazy Evaluation ---
+        def evaluate_visuals_only():
+            # 1. Generate ONLY the high-res 500-point curve for the visual plot
+            yfit_res = plot_model(xfit, smooth_aux, *final_params)
+            return yfit_res
+            
+        # 2. THREAD: Fast Math Evaluation (No UI Freezing!)
+        self.eval_worker = BackgroundWorker(evaluate_visuals_only)
 
-        import pyqtgraph as pg
-        from PyQt5.QtCore import Qt
-        plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("r", width=2, style=Qt.DashLine))
-        fit_name = f"Custom Fit ➔ {pair['y_name']}"
-        self.fit_legend.addItem(plot_item, fit_name)
+        def on_eval_success(yfit): # <--- Only expects yfit now
+            self.progress_dlg.hide()
+            self.progress_dlg.deleteLater()
 
-        if not hasattr(self, 'active_fits'): self.active_fits = []
-        x_raw, y_raw = self._get_raw_fit_coords(xfit, yfit)
-        self.active_fits.append({
-            "name": fit_name, "type": "custom", 
-            "params": final_params, "param_names": param_names,
-            "plot_item": plot_item, "equation": raw_eq,
-            "html_equation": html_eq, "raw_equation": raw_eq, 
+            # --- SMART CLIP FOR MASSIVE EQUATIONS ---
+            y_max, y_min = np.nanmax(y_full), np.nanmin(y_full)
+            y_span = abs(y_max - y_min) or 1.0
+            
+            safe_max = y_max + (y_span * 50)
+            safe_min = y_min - (y_span * 50)
+            
+            yfit = np.nan_to_num(yfit, nan=0.0, posinf=safe_max, neginf=safe_min)
+            yfit = np.clip(yfit, safe_min, safe_max)
+            # ----------------------------------------
+
+            import pyqtgraph as pg
+            from PyQt5.QtCore import Qt
+            
+            # --- ENABLE HARDWARE VIEWPORT CLIPPING ---
+            plot_item = pg.PlotCurveItem(
+                x=xfit, y=yfit, 
+                pen=pg.mkPen("r", width=2, style=Qt.DashLine),
+                clipToView=True, 
+                autoDownsample=True
+            )
+            self.plot_widget.addItem(plot_item)
+            # -----------------------------------------
+            
+            fit_name = f"Custom Fit ➔ {pair['y_name']}"
+            self.fit_legend.addItem(plot_item, fit_name)
+
+            if not hasattr(self, 'active_fits'): self.active_fits = []
+            x_raw, y_raw = self._get_raw_fit_coords(xfit, yfit)
+            self.active_fits.append({
+                    "name": fit_name, "type": "custom", 
+                    "params": final_params, "param_names": param_names,
+                    "plot_item": plot_item, "equation": raw_eq,
+                    "html_equation": html_eq, "raw_equation": raw_eq, 
+                    "param_config": param_config,
+                    "x_raw": x_raw, "y_raw": y_raw,
+                    "x_idx": pair['x'], "aux_cols": used_cols,
+                    "callable": lambda x_arr, aux_arrs: plot_model(x_arr, aux_arrs, *final_params),
+                    "pcov": pcov, # Save raw covariance
+                    "stats": None # Empty stats triggers the Button workflow
+                })
+            
+            self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
+            if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True) 
+            if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
+
+        def on_error(err_str):
+            self.progress_dlg.hide()
+            self.progress_dlg.deleteLater()
+            from ui.dialogs.data_mgmt import CopyableErrorDialog
+            CopyableErrorDialog("Evaluation Error", "Processing failed.", err_str, self).exec()
+
+        self.eval_worker.finished.connect(on_eval_success)
+        self.eval_worker.error.connect(on_error)
+        self.progress_dlg.canceled.connect(self.eval_worker.terminate)
+        
+        self.eval_worker.start()
+        
+    def open_custom_fit_3d_dialog(self):
+        if not self.dataset: return
+        
+        from ui.dialogs.fitting_3d import CustomFit3DDialog
+        from PyQt5.QtWidgets import QDialog
+        import numpy as np
+        
+        dlg = CustomFit3DDialog(self.dataset, self)
+        if dlg.exec() != QDialog.Accepted: return
+        
+        # 1. Intercept the returned data
+        raw_eq, py_eq, html_eq, used_cols, param_names, param_config, stats = dlg.get_result()
+        final_params = [param_config[p]["value"] for p in param_names]
+
+        # 2. Build the 3D grid wrapper
+        def custom_model_calc(xy_tuple, *args):
+            x_val, y_val = xy_tuple
+            
+            # Dummy column dict to prevent crashes if they mapped a static dataset column
+            safe_aux = {c: np.zeros_like(x_val) for c in used_cols} 
+            
+            env = {"np": np, "e": np.e, "pi": np.pi, "x": x_val, "y": y_val, "data_dict": safe_aux}
+            for i, p in enumerate(param_names):
+                env[p] = args[i]
+                
+            with np.errstate(all='ignore'):
+                res_arr = np.asarray(eval(py_eq, {"__builtins__": {}}, env), dtype=np.float64)
+            if res_arr.ndim == 0: res_arr = np.full_like(x_val, float(res_arr))
+            return res_arr
+
+        # 3. Add it to the memory bank
+        if not hasattr(self, 'active_3d_fits'): self.active_3d_fits = []
+        
+        self.active_3d_fits.append({
+            "name": "Custom 3D Fit",
+            "type": "custom",
+            "params": final_params,
+            "param_names": param_names,
+            "callable": custom_model_calc,
             "param_config": param_config,
-            "x_raw": x_raw, "y_raw": y_raw,
-            # --- ADD THESE THREE LINES ---
-            "x_idx": pair['x'], "aux_cols": used_cols,
-            "callable": lambda x_arr, aux_arrs: plot_model(x_arr, aux_arrs, *final_params)
-            # -----------------------------
+            "equation": raw_eq,
+            "html_equation": html_eq,
+            "aux_cols": used_cols, # <--- Add this line to track dependencies!
+            "stats": stats
         })
-        self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
-        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True) # <--- AND THIS
-        if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
+
+        # 4. Reveal UI Buttons & Render!
+        if hasattr(self, 'func_details_btn'): self.func_details_btn.setVisible(True)
+        if hasattr(self, 'clear_fit_btn'): self.clear_fit_btn.setVisible(True)
+        if hasattr(self, 'save_function_btn'): self.save_function_btn.setVisible(True)
+        
+        self.plot() # Triggers _draw_3d, which instantly renders the mesh!
 
     def _get_all_plotted_xy(self, apply_selection=False, aux_cols=None):
         import numpy as np
@@ -3168,7 +3338,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 
                 if hasattr(self, 'phantom_curve'): self.phantom_curve.setVisible(False)
                 
-                raw_eq, py_eq, html_eq, used_cols, param_names, param_config = dlg.get_result()
+                raw_eq, py_eq, html_eq, used_cols, param_names, param_config, pcov = dlg.get_result()
                 
                 res_full = self._get_all_plotted_xy(aux_cols=used_cols, apply_selection=False)
                 if len(res_full) < 4 or len(res_full[0]) == 0: return
@@ -3203,11 +3373,10 @@ class BadgerLoopQtGraph(QMainWindow):
                     if res_arr.ndim == 0: res_arr = np.full_like(x_val, float(res_arr))
                     return res_arr
 
-                try:
-                    final_params = self._execute_universal_fit(custom_model_calc, param_names, param_config, x_calc, y_calc)
-                except Exception as e:
-                    CopyableErrorDialog("Fitting Error", "Optimization failed.", f"{e}", self).exec()
-                    return
+                # --- FIX: Removed the synchronous _execute_universal_fit call! ---
+                # The custom dialog already handled the optimisation. We just pull the values.
+                final_params = [param_config[p]["value"] for p in param_names]
+                # -----------------------------------------------------------------
 
                 sort_idx = np.argsort(x_full)
                 x_sorted = x_full[sort_idx]
@@ -3249,7 +3418,11 @@ class BadgerLoopQtGraph(QMainWindow):
                     "plot_item": plot_item, "equation": raw_eq,
                     "html_equation": html_eq, "raw_equation": raw_eq, 
                     "param_config": param_config,
-                    "x_raw": x_raw, "y_raw": y_raw
+                    "x_raw": x_raw, "y_raw": y_raw,
+                    "x_idx": pair['x'], "aux_cols": used_cols,
+                    "callable": lambda x_arr, aux_arrs: plot_model(x_arr, aux_arrs, *final_params),
+                    "pcov": pcov, # Save raw covariance
+                    "stats": None # Empty stats triggers the Button workflow
                 })
             else:
                 if hasattr(self, 'phantom_curve'): self.phantom_curve.setVisible(False)
@@ -3263,15 +3436,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 self.active_fits.pop(idx)
                 
                 func_type, degree_text, log_base_text, param_config = dlg.get_result()
-                if func_type == "Polynomial":
-                    try:
-                        degree = int(degree_text)
-                        if degree >= 0: self.fit_polynomial(degree, param_config)
-                    except ValueError: pass
-                elif func_type == "Logarithmic": self.fit_logarithmic(log_base_text, param_config)
-                elif func_type == "Exponential": self.fit_exponential(param_config)
-                elif func_type == "Gaussian": self.fit_gaussian(param_config)
-                elif func_type == "Lorentzian": self.fit_lorentzian(param_config)
+                self._launch_common_fit_pipeline(func_type, degree_text, log_base_text, param_config)
 
     def _get_raw_fit_coords(self, x_vis, y_vis):
         xlog = self.xscale.currentText() == "Log"
@@ -3283,202 +3448,6 @@ class BadgerLoopQtGraph(QMainWindow):
             x_raw = np.power(xbase, x_vis) if xlog else np.array(x_vis, copy=True)
             y_raw = np.power(ybase, y_vis) if ylog else np.array(y_vis, copy=True)
         return x_raw, y_raw
-
-    def fit_polynomial(self, degree, param_config):
-        res = self._get_all_plotted_xy(apply_selection=True)
-        if len(res) < 4 or len(res[0]) == 0: return
-        x, y, _, pair = res
-
-        param_names = [f"c{i}" for i in range(degree + 1)]
-        if all(param_config[p]["mode"] == "Auto" and param_config[p]["value"] == 1.0 for p in param_names):
-            import warnings
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore')
-                smart_p0 = np.polyfit(x, y, degree)
-            for i, p in enumerate(param_names):
-                param_config[p]["value"] = smart_p0[i]
-
-        def model(x_val, *args):
-            return sum(c * (x_val**(degree-i)) for i, c in enumerate(args))
-
-        try: final_params = self._execute_universal_fit(model, param_names, param_config, x, y)
-        except Exception:
-            CopyableErrorDialog("Fitting Error", "Optimization failed.", "The parameters failed to converge. Try adjusting your Initial Guesses.", self).exec()
-            return
-            
-        poly = np.poly1d(final_params)
-        full_res = self._get_all_plotted_xy(apply_selection=False)
-        x_full = full_res[0]
-        xfit = np.linspace(x_full.min(), x_full.max(), 500)
-        yfit = poly(xfit)
-
-        plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("k", width=2, style=Qt.DashLine))
-        fit_name = f"Poly (deg {degree}) ➔ {pair['y_name']}"
-        self.fit_legend.addItem(plot_item, fit_name)
-
-        if not hasattr(self, 'active_fits'): self.active_fits = []
-        x_raw, y_raw = self._get_raw_fit_coords(xfit, yfit) 
-        self.active_fits.append({
-            "name": fit_name, "type": "polynomial", "degree": degree,
-            "coeffs": final_params, "callable": poly, "plot_item": plot_item,
-            "equation": "y = " + " + ".join(f"{c:.3g}x^{i}" for i, c in enumerate(final_params[::-1])),
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
-            "x_idx": pair['x']
-        })
-        self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
-        if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
-        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
-
-    def fit_logarithmic(self, base_text, param_config):
-        res = self._get_all_plotted_xy(apply_selection=True)
-        if len(res) < 4 or len(res[0]) == 0: return
-        x, y, _, pair = res
-
-        if base_text.lower() == "e": base = np.e
-        else:
-            try:
-                base = float(base_text)
-                if base <= 0: raise ValueError
-            except ValueError: return
-
-        def model(x_val, a, c): return a * np.log(x_val) / np.log(base) + c
-        param_names = ["a", "c"]
-
-        try: final_params = self._execute_universal_fit(model, param_names, param_config, x, y)
-        except Exception:
-            CopyableErrorDialog("Fitting Error", "Optimization failed.", "The parameters failed to converge. Try adjusting your Initial Guesses.", self).exec()
-            return
-
-        full_res = self._get_all_plotted_xy(apply_selection=False)
-        x_full = full_res[0]
-        xfit = np.linspace(max(1e-15, x_full.min()), x_full.max(), 500) 
-        yfit = model(xfit, *final_params)
-
-        plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("k", width=2, style=Qt.DashLine))
-        fit_name = f"Logarithmic ➔ {pair['y_name']}"
-        self.fit_legend.addItem(plot_item, fit_name)
-
-        if not hasattr(self, 'active_fits'): self.active_fits = []
-        x_raw, y_raw = self._get_raw_fit_coords(xfit, yfit)
-        self.active_fits.append({
-            "name": fit_name, "type": "logarithmic", "base": base_text, "params": final_params,
-            "callable": lambda v: model(v, *final_params), "plot_item": plot_item,
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
-            "x_idx": pair['x']
-        })
-        self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
-        if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
-        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
-
-    def fit_exponential(self, param_config):
-        res = self._get_all_plotted_xy(apply_selection=True)
-        if len(res) < 4 or len(res[0]) == 0: return
-        x, y, _, pair = res
-
-        def model(x_val, a, b, c): return a * np.exp(b * x_val) + c
-        param_names = ["a", "b", "c"]
-
-        try: final_params = self._execute_universal_fit(model, param_names, param_config, x, y)
-        except Exception:
-            CopyableErrorDialog("Fitting Error", "Optimization failed.", "The parameters failed to converge. Try adjusting your Initial Guesses.", self).exec()
-            return
-
-        full_res = self._get_all_plotted_xy(apply_selection=False)
-        x_full = full_res[0]
-        xfit = np.linspace(x_full.min(), x_full.max(), 500)
-        yfit = model(xfit, *final_params)
-
-        plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("k", width=2, style=Qt.DashLine))
-        fit_name = f"Exponential ➔ {pair['y_name']}"
-        self.fit_legend.addItem(plot_item, fit_name)
-
-        if not hasattr(self, 'active_fits'): self.active_fits = []
-        x_raw, y_raw = self._get_raw_fit_coords(xfit, yfit)
-        self.active_fits.append({
-            "name": fit_name, "type": "exponential", "params": final_params,
-            "callable": lambda v: model(v, *final_params), "plot_item": plot_item,
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
-            "x_idx": pair['x']
-        })
-        self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
-        if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
-        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
-
-    def fit_gaussian(self, param_config):
-        res = self._get_all_plotted_xy(apply_selection=True)
-        if len(res) < 4 or len(res[0]) == 0: return
-        x, y, _, pair = res
-
-        def model(x_val, A, mu, sigma): return A * np.exp(-(x_val - mu)**2 / (2 * sigma**2))
-        param_names = ["A", "mu", "sigma"]
-
-        if param_config["A"]["mode"] == "Auto" and param_config["A"]["value"] == 1.0: param_config["A"]["value"] = y.max()
-        if param_config["mu"]["mode"] == "Auto" and param_config["mu"]["value"] == 1.0: param_config["mu"]["value"] = x.mean()
-        if param_config["sigma"]["mode"] == "Auto" and param_config["sigma"]["value"] == 1.0: param_config["sigma"]["value"] = np.std(x)
-
-        try: final_params = self._execute_universal_fit(model, param_names, param_config, x, y)
-        except Exception:
-            CopyableErrorDialog("Fitting Error", "Optimization failed.", "The parameters failed to converge. Try adjusting your Initial Guesses.", self).exec()
-            return
-
-        full_res = self._get_all_plotted_xy(apply_selection=False)
-        x_full = full_res[0]
-        xfit = np.linspace(x_full.min(), x_full.max(), 500)
-        yfit = model(xfit, *final_params)
-
-        plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("k", width=2, style=Qt.DashLine))
-        fit_name = f"Gaussian ➔ {pair['y_name']}"
-        self.fit_legend.addItem(plot_item, fit_name)
-
-        if not hasattr(self, 'active_fits'): self.active_fits = []
-        x_raw, y_raw = self._get_raw_fit_coords(xfit, yfit)
-        self.active_fits.append({
-            "name": fit_name, "type": "gaussian", "params": final_params,
-            "callable": lambda v: model(v, *final_params), "plot_item": plot_item,
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
-            "x_idx": pair['x']
-        })
-        self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
-        if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
-        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
-
-    def fit_lorentzian(self, param_config):
-        res = self._get_all_plotted_xy(apply_selection=True)
-        if len(res) < 4 or len(res[0]) == 0: return
-        x, y, _, pair = res
-
-        def model(x_val, A, x0, gamma): return A / (1 + ((x_val - x0) / gamma)**2)
-        param_names = ["A", "x0", "gamma"]
-
-        if param_config["A"]["mode"] == "Auto" and param_config["A"]["value"] == 1.0: param_config["A"]["value"] = y.max()
-        if param_config["x0"]["mode"] == "Auto" and param_config["x0"]["value"] == 1.0: param_config["x0"]["value"] = x.mean()
-        if param_config["gamma"]["mode"] == "Auto" and param_config["gamma"]["value"] == 1.0: param_config["gamma"]["value"] = np.std(x)
-
-        try: final_params = self._execute_universal_fit(model, param_names, param_config, x, y)
-        except Exception:
-            CopyableErrorDialog("Fitting Error", "Optimization failed.", "The parameters failed to converge. Try adjusting your Initial Guesses.", self).exec()
-            return
-
-        full_res = self._get_all_plotted_xy(apply_selection=False)
-        x_full = full_res[0]
-        xfit = np.linspace(x_full.min(), x_full.max(), 500)
-        yfit = model(xfit, *final_params)
-
-        plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("k", width=2, style=Qt.DashLine))
-        fit_name = f"Lorentzian ➔ {pair['y_name']}"
-        self.fit_legend.addItem(plot_item, fit_name)
-
-        if not hasattr(self, 'active_fits'): self.active_fits = []
-        x_raw, y_raw = self._get_raw_fit_coords(xfit, yfit)
-        self.active_fits.append({
-            "name": fit_name, "type": "lorentzian", "params": final_params,
-            "callable": lambda v: model(v, *final_params), "plot_item": plot_item,
-            "param_config": param_config, "x_raw": x_raw, "y_raw": y_raw,
-            "x_idx": pair['x']
-        })
-        self.save_function_btn.setVisible(True); self.clear_fit_btn.setVisible(True); self.func_details_btn.setVisible(True)
-        if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(True)
-        if hasattr(self, 'save_fit_col_btn'): self.save_fit_col_btn.setVisible(True)
 
     def clear_fit(self):
         # Route to the correct memory bank based on plot mode
@@ -3521,35 +3490,78 @@ class BadgerLoopQtGraph(QMainWindow):
             if hasattr(self, 'edit_fit_btn'): self.edit_fit_btn.setVisible(False)
 
     def save_function(self):
-        if not getattr(self, 'active_fits', []): return
-        if len(self.active_fits) == 1:
-            fit = self.active_fits[0]
+        # Route to the correct memory bank based on plot mode
+        active_list = getattr(self, 'active_3d_fits', []) if self.plot_mode == "3D" else getattr(self, 'active_fits', [])
+        if not active_list: return
+        
+        if len(active_list) == 1:
+            fit = active_list[0]
         else:
-            dlg = MultiFitManagerDialog(self.active_fits, "Save", self)
+            from ui.dialogs.fitting import MultiFitManagerDialog
+            dlg = MultiFitManagerDialog(active_list, "Save", self)
             if dlg.exec() == QDialog.Accepted:
                 _, idx = dlg.get_selection()
-                fit = self.active_fits[idx]
+                fit = active_list[idx]
             else:
                 return
+
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import numpy as np
+        
+        # --- NEW: Ask the user about statistics ---
+        include_stats = False
+        if "stats" in fit and fit["stats"]:
+            ans = QMessageBox.question(
+                self, "Include Statistics", 
+                "Would you like to include the fit statistics (\u03c7\u00b2, RMSE, Uncertainties) in the saved file?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            include_stats = (ans == QMessageBox.Yes)
+        # ------------------------------------------
 
         fname, _ = QFileDialog.getSaveFileName(self, "Save Function", "", "Text files (*.txt)")
         if not fname: return
         if not fname.endswith(".txt"): fname += ".txt"
 
         with open(fname, "w") as f:
-            f.write(f"{fit['type']}\n")
-            if fit["type"] == "polynomial":
+            prefix = "3D: " if self.plot_mode == "3D" else ""
+            f.write(f"{prefix}{fit['type']}\n")
+            
+            if fit["type"] == "polynomial" and self.plot_mode == "2D":
                 f.write(f"degree: {fit['degree']}\n")
                 for c in fit["coeffs"]: f.write(f"{c}\n")
+                
             elif fit["type"] == "logarithmic":
                 f.write(f"base: {fit['base']}\n")
                 for p in fit["params"]: f.write(f"{p}\n")
+                
             elif fit["type"] == "custom":
-                f.write(f"{fit['raw_equation']}\n")
+                f.write(f"{fit.get('raw_equation', fit.get('equation', ''))}\n")
                 f.write(",".join(fit['param_names']) + "\n")
+                
+                if self.plot_mode == "3D":
+                    aux_cols = fit.get("aux_cols", [])
+                    aux_str = ",".join([str(c) for c in aux_cols]) if aux_cols else "None"
+                    f.write(f"aux_cols: {aux_str}\n")
+                
                 for p in fit["params"]: f.write(f"{p}\n")
+                
             else:
+                if self.plot_mode == "3D" and "degree" in fit:
+                    f.write(f"degree: {fit['degree']}\n")
                 for p in fit["params"]: f.write(f"{p}\n")
+                
+            # --- NEW: Write the optional stats block ---
+            if include_stats:
+                s = fit["stats"]
+                f.write("\n### STATS ###\n")
+                f.write(f"dof: {s.get('dof', 1)}\n")
+                f.write(f"chi_sq: {s.get('chi_sq', 0):.6e}\n")
+                f.write(f"red_chi_sq: {s.get('red_chi_sq', 0):.6e}\n")
+                f.write(f"rmse: {s.get('rmse', 0):.6e}\n")
+                errs = s.get('param_errs', [])
+                err_str = ",".join([f"{err:.6e}" if not np.isnan(err) else "NaN" for err in errs])
+                f.write(f"param_errs: {err_str}\n")
                 
     def export_fit_to_column(self):
         if not getattr(self, 'active_fits', []): return
@@ -3731,7 +3743,7 @@ class BadgerLoopQtGraph(QMainWindow):
         pts = all_pts[np.isfinite(all_pts).all(axis=1)]
         
         try:
-            final_params, param_names, model_callable = execute_3d_surface_fit(pts, func_type, param_config, degree)
+            final_params, param_names, model_callable, stats = execute_3d_surface_fit(pts, func_type, param_config, degree)
         except Exception as e:
             from ui.dialogs.data_mgmt import CopyableErrorDialog
             CopyableErrorDialog("Fitting Error", "Optimization failed.", str(e), self).exec()
@@ -3747,7 +3759,8 @@ class BadgerLoopQtGraph(QMainWindow):
             "callable": model_callable,
             "param_config": param_config,
             "degree": degree,
-            "equation": eq_str
+            "equation": eq_str,
+            "stats": stats # <--- This is the crucial missing line!
         })
         
         self.plot()
@@ -4609,6 +4622,14 @@ class BadgerLoopQtGraph(QMainWindow):
 
         # --- 2D Fits ---
         if ftype == "Polynomial":
+            degree = fit.get("degree", 1)
+            terms = []
+            for i in range(degree + 1):
+                power = degree - i
+                if power == 0: terms.append(f"c<sub>{i}</sub>")
+                elif power == 1: terms.append(f"c<sub>{i}</sub>x")
+                else: terms.append(f"c<sub>{i}</sub>x<sup>{power}</sup>")
+            eq_str = f"<span style='{math_style}'>y = " + " + ".join(terms) + "</span>"
             coeff_str = "<br>".join([f"c<sub>{i}</sub> = {c:.6e}" for i, c in enumerate(fit.get("coeffs", []))])
         elif ftype == "Logarithmic":
             base = fit.get("base", "e")
@@ -4633,24 +4654,153 @@ class BadgerLoopQtGraph(QMainWindow):
             ftype = f"2D Polynomial (Degree {fit.get('degree', 1)})"
             eq_str = fit.get("equation", "")
             coeff_str = "<br>".join([f"C<sub>{i}</sub> = {c:.6e}" for i, c in enumerate(fit['params'])])
+            
         elif raw_type == "2D Gaussian":
-            ftype = "2D Gaussian (Tilted Baseline)"
-            eq_str = (f"<table style='{math_style}' border='0' cellspacing='0' cellpadding='2'><tr><td rowspan='2' valign='middle'>Z = A &middot; exp&nbsp;&nbsp;[ &minus; (</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;(X &minus; X<sub>0</sub>)<sup>2</sup>&nbsp;</td><td rowspan='2' valign='middle'>+</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;(Y &minus; Y<sub>0</sub>)<sup>2</sup>&nbsp;</td><td rowspan='2' valign='middle'>) ] + D&middot;X + E&middot;Y + C</td></tr><tr><td align='center'>2&sigma;<sub>x</sub><sup>2</sup></td><td align='center'>2&sigma;<sub>y</sub><sup>2</sup></td></tr></table>")
-            coeff_str = f"A = {fit['params'][0]:.6e}<br>X<sub>0</sub> = {fit['params'][1]:.6e}<br>Y<sub>0</sub> = {fit['params'][2]:.6e}<br>&sigma;<sub>x</sub> = {fit['params'][3]:.6e}<br>&sigma;<sub>y</sub> = {fit['params'][4]:.6e}<br>D = {fit['params'][5]:.6e}<br>E = {fit['params'][6]:.6e}<br>C = {fit['params'][7]:.6e}"
+            ftype = "2D Gaussian"
+            eq_str = (f"<table style='{math_style}' border='0' cellspacing='0' cellpadding='2'><tr><td rowspan='2' valign='middle'>Z = A &middot; exp&nbsp;&nbsp;[ &minus; (</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;(X &minus; X<sub>0</sub>)<sup>2</sup>&nbsp;</td><td rowspan='2' valign='middle'>+</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;(Y &minus; Y<sub>0</sub>)<sup>2</sup>&nbsp;</td><td rowspan='2' valign='middle'>) ]</td></tr><tr><td align='center'>2&sigma;<sub>x</sub><sup>2</sup></td><td align='center'>2&sigma;<sub>y</sub><sup>2</sup></td></tr></table>")
+            coeff_str = f"A = {fit['params'][0]:.6e}<br>X<sub>0</sub> = {fit['params'][1]:.6e}<br>Y<sub>0</sub> = {fit['params'][2]:.6e}<br>&sigma;<sub>x</sub> = {fit['params'][3]:.6e}<br>&sigma;<sub>y</sub> = {fit['params'][4]:.6e}"
+            
         elif raw_type == "2D Lorentzian":
-            ftype = "2D Lorentzian (Tilted Baseline)"
-            eq_str = (f"<table style='{math_style}' border='0' cellspacing='0' cellpadding='2'><tr><td rowspan='2' valign='middle'>Z = </td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;A&nbsp;</td><td rowspan='2' valign='middle'> + D&middot;X + E&middot;Y + C</td></tr><tr><td align='center'><table style='{math_style}' border='0' cellspacing='0' cellpadding='0'><tr><td rowspan='2' valign='middle'>1 + &nbsp;[</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;X &minus; X<sub>0</sub>&nbsp;</td><td rowspan='2' valign='middle'>]<sup>2</sup> + [</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;Y &minus; Y<sub>0</sub>&nbsp;</td><td rowspan='2' valign='middle'>]<sup>2</sup></td></tr><tr><td align='center'>&gamma;<sub>x</sub></td><td align='center'>&gamma;<sub>y</sub></td></tr></table></td></tr></table>")
-            coeff_str = f"A = {fit['params'][0]:.6e}<br>X<sub>0</sub> = {fit['params'][1]:.6e}<br>Y<sub>0</sub> = {fit['params'][2]:.6e}<br>&gamma;<sub>x</sub> = {fit['params'][3]:.6e}<br>&gamma;<sub>y</sub> = {fit['params'][4]:.6e}<br>D = {fit['params'][5]:.6e}<br>E = {fit['params'][6]:.6e}<br>C = {fit['params'][7]:.6e}" 
-        elif raw_type == "2D Harmonic (Ripple)":
+            ftype = "2D Lorentzian"
+            eq_str = (f"<table style='{math_style}' border='0' cellspacing='0' cellpadding='2'><tr><td rowspan='2' valign='middle'>Z = </td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;A&nbsp;</td></tr><tr><td align='center'><table style='{math_style}' border='0' cellspacing='0' cellpadding='0'><tr><td rowspan='2' valign='middle'>1 + &nbsp;[</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;X &minus; X<sub>0</sub>&nbsp;</td><td rowspan='2' valign='middle'>]<sup>2</sup> + [</td><td align='center' style='border-bottom: 1px solid black;'>&nbsp;Y &minus; Y<sub>0</sub>&nbsp;</td><td rowspan='2' valign='middle'>]<sup>2</sup></td></tr><tr><td align='center'>&gamma;<sub>x</sub></td><td align='center'>&gamma;<sub>y</sub></td></tr></table></td></tr></table>")
+            coeff_str = f"A = {fit['params'][0]:.6e}<br>X<sub>0</sub> = {fit['params'][1]:.6e}<br>Y<sub>0</sub> = {fit['params'][2]:.6e}<br>&gamma;<sub>x</sub> = {fit['params'][3]:.6e}<br>&gamma;<sub>y</sub> = {fit['params'][4]:.6e}" 
+            
+        elif raw_type in ["2D Harmonic", "2D Harmonic (Ripple)"]:
             ftype = "2D Harmonic (Sine Wave)"
-            eq_str = f"<span style='{math_style}'>Z = A &middot; sin(&omega;<sub>x</sub>X + &phi;<sub>x</sub>) &middot; sin(&omega;<sub>y</sub>Y + &phi;<sub>y</sub>) + C</span>"
-            coeff_str = f"A = {fit['params'][0]:.6e}<br>&omega;<sub>x</sub> = {fit['params'][1]:.6e}<br>&phi;<sub>x</sub> = {fit['params'][2]:.6e}<br>&omega;<sub>y</sub> = {fit['params'][3]:.6e}<br>&phi;<sub>y</sub> = {fit['params'][4]:.6e}<br>C = {fit['params'][5]:.6e}"
-        msg = QMessageBox(self)
-        msg.setWindowTitle(f"Function Details: {fit['name']}")
-        msg.setText(f"<b style='font-size: 16px;'>Fit Type:</b> <span style='font-size: 16px;'>{ftype}</span>")
-        msg.setStyleSheet("QLabel { font-size: 14px; }")
-        msg.setInformativeText(f"<b>Equation Form:</b><br><br>{eq_str}<br><b>Calculated Coefficients:</b><br><span style='font-family: Consolas, monospace; font-size: 15px;'>{coeff_str}</span>")
-        msg.exec()
+            eq_str = f"<span style='{math_style}'>Z = A &middot; sin(&omega;<sub>x</sub>X + &phi;<sub>x</sub>) &middot; sin(&omega;<sub>y</sub>Y + &phi;<sub>y</sub>)</span>"
+            coeff_str = f"A = {fit['params'][0]:.6e}<br>&omega;<sub>x</sub> = {fit['params'][1]:.6e}<br>&phi;<sub>x</sub> = {fit['params'][2]:.6e}<br>&omega;<sub>y</sub> = {fit['params'][3]:.6e}<br>&phi;<sub>y</sub> = {fit['params'][4]:.6e}"
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel, QPushButton, QGroupBox
+        from PyQt5.QtCore import Qt
+        import numpy as np
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Function Details: {fit['name']}")
+        dlg.setMinimumSize(500, 650) # Taller window to accommodate the extra boxes
+        
+        layout = QVBoxLayout(dlg)
+        
+        # 1. The Header
+        header_lbl = QLabel(f"<b style='font-size: 16px;'>Fit Type:</b> <span style='font-size: 16px;'>{ftype}</span>")
+        layout.addWidget(header_lbl)
+        
+        # Helper function to generate clean, highly-optimised UI boxes
+        def create_scroll_box(title, html_content, text_colour):
+            from PyQt5.QtWidgets import QGroupBox, QVBoxLayout, QTextBrowser
+            group = QGroupBox(title)
+            # Make the group box frame blend cleanly with the theme
+            group.setStyleSheet(f"""
+                QGroupBox {{ font-weight: bold; font-size: 14px; margin-top: 2.5ex; border: 1px solid {theme.border}; border-radius: 6px; }}
+                QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 10px; padding: 0 5px; color: {theme.primary_text}; }}
+            """)
+            box_layout = QVBoxLayout(group)
+            box_layout.setContentsMargins(4, 14, 4, 4) # Tighter margins inside the frame
+            
+            # --- FIX: Use QTextBrowser instead of QLabel to prevent HTML layout freezing ---
+            tb = QTextBrowser()
+            tb.setHtml(html_content)
+            tb.setOpenLinks(False)
+            tb.setStyleSheet(f"font-size: 14px; background-color: {theme.panel_bg}; color: {text_colour}; padding: 10px; border-radius: 4px; border: none;")
+            
+            box_layout.addWidget(tb)
+            return group
+
+        # 2. Equation Box
+        layout.addWidget(create_scroll_box("Equation Form", eq_str, theme.fg))
+        
+        # 3. Coefficients Box
+        layout.addWidget(create_scroll_box("Calculated Coefficients", f"<span style='font-family: Consolas, monospace; font-size: 15px;'>{coeff_str}</span>", theme.fg))
+        
+        # 4. Statistics Box (Conditional & Asynchronous)
+        def build_stats_html(s):
+            html = f"<div style='font-family: Consolas, monospace;'>"
+            html += f"<b>Degrees of Freedom:</b> {s.get('dof', 'N/A')}<br>"
+            html += f"<b>&chi;<sup>2</sup> (SSE):</b> {s.get('chi_sq', 0):.5g}<br>"
+            html += f"<b>Reduced &chi;<sup>2</sup>:</b> {s.get('red_chi_sq', 0):.5g}<br>"
+            html += f"<b>RMSE:</b> {s.get('rmse', 0):.5g}<br><br>"
+            
+            html += "<b>Standard Errors (&plusmn;):</b><br>"
+            errs = s.get("param_errs", [])
+            p_names = fit.get("param_names", [])
+            
+            if not p_names and "coeffs" in fit:
+                p_names = [f"C{i}" for i in range(len(fit.get("coeffs", [])))]
+                
+            for i, p_name in enumerate(p_names):
+                if i < len(errs):
+                    err_val = f"{errs[i]:.5g}" if not np.isnan(errs[i]) else "N/A (Fixed/Loaded)"
+                    html += f"{GREEK_MAP.get(p_name, p_name)}: {err_val}<br>"
+            html += "</div>"
+            return html
+            
+        if "stats" in fit and fit["stats"] is not None:
+            # Stats are populated, render instantly
+            layout.addWidget(create_scroll_box("Fit Diagnostics", build_stats_html(fit["stats"]), theme.success_text))
+            
+        else:
+            # Stats missing: Spawn the button for ANY fit type
+            calc_btn = QPushButton("📊 Calculate Fit Statistics")
+            calc_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; color: {theme.primary_text}; padding: 8px; border: 2px solid {theme.primary_border}; border-radius: 4px; margin-top: 10px;")
+            layout.addWidget(calc_btn)
+            
+            def run_lazy_stats():
+                calc_btn.setEnabled(False)
+                calc_btn.setText("Evaluating Dataset...")
+                
+                from PyQt5.QtWidgets import QProgressDialog
+                import numpy as np
+                from ui.dialogs.fitting import calculate_fit_statistics
+                
+                dlg.stat_prog = QProgressDialog("Calculating standard errors and variance...", None, 0, 0, dlg)
+                dlg.stat_prog.setWindowTitle("Heavy Calculation")
+                dlg.stat_prog.setModal(True)
+                dlg.stat_prog.setCancelButton(None)
+                dlg.stat_prog.show()
+                QApplication.processEvents()
+                
+                def heavy_math():
+                    y_data = None; y_calc = None
+                    mode = getattr(self, 'plot_mode', '2D')
+                    
+                    if mode == "2D":
+                        res = self._get_all_plotted_xy(apply_selection=False, aux_cols=fit.get("aux_cols", []))
+                        if len(res) >= 4 and len(res[0]) > 0:
+                            x, y_data, aux_dict, _ = res
+                            y_calc = fit["callable"](x, aux_dict) if fit["type"] == "custom" else fit["callable"](x)
+
+                    if y_data is not None and y_calc is not None:
+                        param_count = len(fit.get("params", []))
+                        # Pass the saved pcov matrix into the calculator!
+                        return calculate_fit_statistics(y_data, y_calc, fit.get("pcov"), param_count)
+                    return None
+                    
+                dlg.stat_worker = BackgroundWorker(heavy_math)
+                
+                def on_success(new_stats):
+                    dlg.stat_prog.accept()
+                    if new_stats:
+                        fit["stats"] = new_stats # Cache it!
+                        new_box = create_scroll_box("Fit Diagnostics", build_stats_html(new_stats), theme.success_text)
+                        layout.insertWidget(layout.indexOf(calc_btn), new_box)
+                        calc_btn.hide()
+                        calc_btn.deleteLater()
+                    else:
+                        calc_btn.setText("Error: Could not calculate")
+                        
+                dlg.stat_worker.finished.connect(on_success)
+                dlg.stat_worker.start()
+                
+            calc_btn.clicked.connect(run_lazy_stats)
+
+        # 5. The Close Button
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px 15px;")
+        close_btn.clicked.connect(dlg.accept)
+        btn_box.addWidget(close_btn)
+        
+        layout.addLayout(btn_box)
+        dlg.exec()
 
     def set_plot_mode(self, mode):
         # --- NEW: UI CLEAN SLATE ON MODE SWITCH ---
@@ -7331,7 +7481,7 @@ class BadgerLoopQtGraph(QMainWindow):
 
             # --- 3D FITTING ---
             self.fitting_menu.addAction("Fit 3D Plane / Surface to data").triggered.connect(self.open_fit_3d_surface_dialog)
-            self.fitting_menu.addAction("Fit Custom 3D Equation (Z = f(X,Y))").triggered.connect(lambda: print("Launch 3D Custom Fit"))
+            self.fitting_menu.addAction("Fit Custom 3D Equation (Z = f(X,Y))").triggered.connect(self.open_custom_fit_3d_dialog)
 
         elif mode == "Heatmap":
             # --- HEATMAP ANALYSIS ---
