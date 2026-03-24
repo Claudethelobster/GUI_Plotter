@@ -423,3 +423,20 @@ class PlotWorkerThread(QThread):
         except Exception as e:
             traceback.print_exc()
             self.error.emit(str(e))
+            
+class BackgroundWorker(QThread):
+    """Runs heavy maths and evaluations in the background to prevent GUI freezing."""
+    finished = pyqtSignal(object) 
+    error = pyqtSignal(str)
+
+    def __init__(self, func, *args):
+        super().__init__()
+        self.func = func
+        self.args = args
+
+    def run(self):
+        try:
+            result = self.func(*self.args)
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
