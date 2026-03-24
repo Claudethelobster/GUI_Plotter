@@ -308,10 +308,8 @@ def execute_3d_surface_fit(pts, func_type, param_config, degree=None):
             fixed_params[p] = float(param_config[p]["value"])
 
     if not free_params:
-        # Fallback stats if fully locked
-        z_calc = model((x_data, y_data), *[param_config[p]["value"] for p in param_names])
-        stats = calculate_fit_statistics(z_data, z_calc, None, len(param_names))
-        return [param_config[p]["value"] for p in param_names], param_names, model, stats
+        # Fallback if fully locked
+        return [param_config[p]["value"] for p in param_names], param_names, model, None
 
     def dynamic_wrapper(xy_val, *args):
         kwargs = dict(fixed_params)
@@ -326,31 +324,17 @@ def execute_3d_surface_fit(pts, func_type, param_config, degree=None):
         popt, pcov = curve_fit(dynamic_wrapper, (x_data, y_data), z_data, p0=p0, maxfev=20000)
 
     final_params = []
-    full_param_errs = []
     popt_idx = 0
     
-    free_errs = []
-    if pcov is not None and not np.isinf(pcov).all() and not np.isnan(pcov).all():
-        try: free_errs = np.sqrt(np.diag(pcov)).tolist()
-        except: free_errs = [float('nan')] * len(free_params)
-    else:
-        free_errs = [float('nan')] * len(free_params)
-
     for p in param_names:
         if p in free_params:
             final_params.append(popt[popt_idx])
-            full_param_errs.append(free_errs[popt_idx])
             popt_idx += 1
         else:
             final_params.append(fixed_params[p])
-            full_param_errs.append(0.0)
 
-    # --- FIX: Calculate stats ---
-    z_calc = model((x_data, y_data), *final_params)
-    stats = calculate_fit_statistics(z_data, z_calc, pcov, len(param_names))
-    stats["param_errs"] = full_param_errs
-
-    return final_params, param_names, model, stats
+    # --- FIX: Defer stats to the async UI button! ---
+    return final_params, param_names, model, pcov
 
 
 class CustomFit3DDialog(QDialog):
@@ -1178,42 +1162,27 @@ class CustomFit3DDialog(QDialog):
             import warnings
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                # --- FIX: Capture pcov ---
                 popt, pcov = curve_fit(dynamic_wrapper, (x, y), z, p0=p0, maxfev=5000)
                 
             final_params = []
-            full_param_errs = []
             popt_idx = 0
             
-            free_errs = []
-            if pcov is not None and not np.isinf(pcov).all() and not np.isnan(pcov).all():
-                try: free_errs = np.sqrt(np.diag(pcov)).tolist()
-                except: free_errs = [float('nan')] * len(free_params)
-            else:
-                free_errs = [float('nan')] * len(free_params)
-
             for p in self.parameters:
                 if p in free_params:
                     final_params.append(popt[popt_idx])
-                    full_param_errs.append(free_errs[popt_idx])
                     popt_idx += 1
                 else:
                     final_params.append(fixed_params[p])
-                    full_param_errs.append(0.0)
                     
-            # --- FIX: Calculate stats ---
-            z_calc = dynamic_wrapper((x, y), *popt)
-            stats = calculate_fit_statistics(z, z_calc, pcov, len(self.parameters))
-            stats["param_errs"] = full_param_errs
-            
-            return final_params, stats
+            # Return raw matrix instead of eager stats
+            return final_params, pcov
 
         self.opt_worker = LocalWorker(execute_scipy)
 
         def on_success(result):
             from PyQt5.QtWidgets import QMessageBox
-            final_params, stats = result
-            self.latest_stats = stats # Save to memory for get_result()
+            final_params, pcov = result
+            self.latest_pcov = pcov # Save to memory for get_result()
             self._opt_cycles += 1
             
             new_vals = []
@@ -1264,27 +1233,9 @@ class CustomFit3DDialog(QDialog):
             except: val = 1.0
             final_config[p] = {"mode": controls["mode"].currentText(), "value": val}
             
-        stats = getattr(self, 'latest_stats', None)
-        
-        # On-the-fly stats if user didn't optimize
-        if stats is None:
-            x, y, z = self._get_3d_data()
-            if x is not None:
-                safe_aux = {c: np.zeros_like(x) for c in self.used_cols}
-                def norm_func(v):
-                    arr = np.asarray(v, dtype=np.float64)
-                    m = np.max(np.abs(arr))
-                    return arr / m if m != 0 else arr
-                env = {"np": np, "e": np.e, "pi": np.pi, "x": x, "y": y, "data_dict": safe_aux, "norm": norm_func}
-                for p, conf in final_config.items(): env[p] = conf["value"]
-                try:
-                    z_calc = np.asarray(eval(self.parsed_equation, {"__builtins__": {}}, env), dtype=np.float64)
-                    if z_calc.ndim == 0: z_calc = np.full_like(x, float(z_calc))
-                    stats = calculate_fit_statistics(z, z_calc, None, len(self.parameters))
-                except:
-                    pass
+        pcov = getattr(self, 'latest_pcov', None)
 
-        return self.equation_input.toPlainText().strip(), self.parsed_equation, self.html_equation, self.used_cols, self.parameters, final_config, stats
+        return self.equation_input.toPlainText().strip(), self.parsed_equation, self.html_equation, self.used_cols, self.parameters, final_config, pcov
 
     def handle_done(self):
         self.accept()
