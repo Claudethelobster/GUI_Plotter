@@ -17,7 +17,11 @@ class Renderer3D:
         mw: Reference to the BadgerLoopQtGraph main window instance.
         """
         try:
-            if hasattr(mw, 'progress_dialog'): mw.progress_dialog.accept()
+                # --- FIX: Safely close the progress dialog ---
+            if getattr(mw, 'progress_dialog', None) is not None:
+                try: mw.progress_dialog.accept()
+                except: pass
+            # ---------------------------------------------
             
             # Safely abort if OpenGL failed to initialise on boot
             if mw.gl_widget is None or gl is None: return
