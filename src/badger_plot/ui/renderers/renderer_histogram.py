@@ -4,6 +4,7 @@ import pyqtgraph as pg
 import matplotlib
 import re
 from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtCore import QTimer
 from core.theme import theme
 
 class RendererHistogram:
@@ -15,9 +16,16 @@ class RendererHistogram:
         """
         mw.current_legend_entries = [] # Required for the Legend Customiser Dialog
         
+        # --- INCORPORATED THE GHOST DIALOG KILLER ---
+        if getattr(mw, 'progress_dialog', None) is not None:
+            try:
+                mw.progress_dialog.setValue(mw.progress_dialog.maximum())
+                mw.progress_dialog.hide()
+                QTimer.singleShot(0, mw.progress_dialog.close)
+            except: pass
+        # --------------------------------------------
+        
         try:
-            if hasattr(mw, 'progress_dialog'): mw.progress_dialog.accept()
-            
             # 1. Safely clear old lines, scatters, error bars
             dummy_arr = np.array([], dtype=np.float64)
             for pool_name in ['curve_pool', 'scatter_pool']:
@@ -40,7 +48,7 @@ class RendererHistogram:
                 except: pass
             mw.bar_pool.clear()
             
-            # UNLOCK THE VIEWBOX (Fixes cropping)
+            # UNLOCK THE VIEWBOX (Fixes cropping, keeps panning free)
             mw.plot_widget.getViewBox().setLimits(xMin=-np.inf, xMax=np.inf, yMin=-np.inf, yMax=np.inf)
             mw.plot_widget.enableAutoRange(axis='xy', enable=True)
             
@@ -49,10 +57,7 @@ class RendererHistogram:
             mw.heatmap_image_item.setVisible(False)
             mw.heatmap_item.setVisible(False)
             
-            # --- ADD THIS MISSING LINE ---
             mw._apply_canvas_settings()
-            # -----------------------------
-            
             added_to_legend = set()
             
             # Determine dynamic colours for the neat bounding box
@@ -183,7 +188,6 @@ class RendererHistogram:
                 # RENDER THE STATS HUD
                 stats = pkg.get("stats", {})
                 if stats and hasattr(mw, 'toggle_stats_btn') and mw.toggle_stats_btn.isChecked():
-                    # Calculate the mode visually from the highest bin
                     mode_idx = np.argmax(counts)
                     mode_val = centers[mode_idx]
                     
@@ -206,7 +210,27 @@ class RendererHistogram:
                         mw.stats_label.move(15, 15)
                     mw.stats_label.show()
                     mw.stats_label.raise_()
+            
+            # --- INCORPORATED CDF / FITS RENDERER ---
+            if hasattr(mw, 'active_fits') and mw.active_fits:
+                for fit in mw.active_fits:
+                    if "x_raw" in fit and "y_raw" in fit:
+                        x_raw, y_raw = fit["x_raw"], fit["y_raw"]
+                        target_vb = mw.vb_right if fit.get("axis") == "R" else mw.plot_widget
+                        
+                        if fit.get("plot_item") not in target_vb.addedItems:
+                            target_vb.addItem(fit["plot_item"]) 
+                            
+                        fit["plot_item"].setData(x_raw, y_raw)
+                    
+                    mw.fit_legend.addItem(fit["plot_item"], fit["name"])
                 
+                if hasattr(mw, 'func_details_btn'): mw.func_details_btn.setVisible(True)
+                if hasattr(mw, 'save_function_btn'): mw.save_function_btn.setVisible(True)
+                if hasattr(mw, 'clear_fit_btn'): mw.clear_fit_btn.setVisible(True)
+                if hasattr(mw, 'edit_fit_btn'): mw.edit_fit_btn.setVisible(True)
+            # ----------------------------------------
+            
             mw.plot_widget.getViewBox().autoRange(padding=0.1)
             
             # Re-apply any visual legend overrides immediately
@@ -217,3 +241,10 @@ class RendererHistogram:
             QMessageBox.critical(mw, "Rendering Error", f"A fatal error occurred while drawing the Histogram.\n\n{e}\n\n{traceback.format_exc()}")
         finally:
             mw._is_plotting = False
+            # --- INCORPORATED FINAL GHOST DIALOG FALLBACK ---
+            if getattr(mw, 'progress_dialog', None) is not None:
+                try:
+                    mw.progress_dialog.hide()
+                    QTimer.singleShot(0, mw.progress_dialog.close)
+                except: pass
+            # ------------------------------------------------
