@@ -4736,7 +4736,9 @@ class BadgerLoopQtGraph(QMainWindow):
                     if msg.clickedButton() == btn_cancel: return 
                     elif msg.clickedButton() == btn_detected: opts["delimiter"] = detected_delim 
 
-            if hasattr(self, 'progress_dialog'): self.progress_dialog.deleteLater()
+            if getattr(self, 'progress_dialog', None) is not None:
+                try: self.progress_dialog.deleteLater()
+                except: pass
             self.progress_dialog = QProgressDialog("Initializing...", "Cancel", 0, 100, self)
             self.progress_dialog.setWindowTitle("Loading Data")
             self.progress_dialog.setWindowModality(Qt.WindowModal)
