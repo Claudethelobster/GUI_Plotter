@@ -37,17 +37,30 @@ class FileEditor:
 
     @staticmethod
     def append_column_to_file(file_type, dataset, target_file, new_name, calculated_blocks, last_load_opts):
-        # --- NATIVE HDF5 INTERCEPT ---
+        # --- FIXED: NATIVE HDF5 INTERCEPT ---
         if file_type == "HDF5":
             import h5py
             if hasattr(dataset, 'file') and dataset.file:
                 try: dataset.file.close() # Free the Windows file lock
                 except: pass
             with h5py.File(target_file, 'a') as f:
-                if new_name in f: del f[new_name]
-                data_to_write = np.concatenate(calculated_blocks) if len(calculated_blocks) > 1 else calculated_blocks[0]
-                f.create_dataset(new_name, data=data_to_write)
+                groups = [k for k in f.keys() if isinstance(f[k], h5py.Group)]
+                
+                if not groups:
+                    # Flat file structure (No Sweeps)
+                    if new_name in f: del f[new_name]
+                    data_to_write = np.concatenate(calculated_blocks) if len(calculated_blocks) > 1 else calculated_blocks[0]
+                    f.create_dataset(new_name, data=data_to_write)
+                else:
+                    # Multi-sweep structure
+                    groups.sort() # Ensure Sweep_0, Sweep_1 order matches calculated_blocks
+                    for idx, grp_name in enumerate(groups):
+                        if idx < len(calculated_blocks):
+                            grp = f[grp_name]
+                            if new_name in grp: del grp[new_name]
+                            grp.create_dataset(new_name, data=calculated_blocks[idx])
             return
+        # ----------------------------------
 
         if file_type == "MultiCSV":
             delim = last_load_opts.get("delimiter", ",")
@@ -237,7 +250,7 @@ class FileEditor:
 
     @staticmethod
     def rewrite_column_name_in_file(file_type, dataset, target_file, col_idx, new_name, last_load_opts):
-        # --- NATIVE HDF5 INTERCEPT ---
+        # --- FIXED: NATIVE HDF5 INTERCEPT ---
         if file_type == "HDF5":
             import h5py
             if hasattr(dataset, 'file') and dataset.file:
@@ -245,10 +258,21 @@ class FileEditor:
                 except: pass
             with h5py.File(target_file, 'a') as f:
                 old_name = dataset.column_names.get(col_idx)
-                if old_name and old_name in f:
-                    f[new_name] = f[old_name] # Copy to new name
-                    del f[old_name]           # Delete old name
+                if not old_name: return
+                
+                groups = [k for k in f.keys() if isinstance(f[k], h5py.Group)]
+                if not groups:
+                    if old_name in f:
+                        f[new_name] = f[old_name]
+                        del f[old_name]
+                else:
+                    for grp_name in groups:
+                        grp = f[grp_name]
+                        if old_name in grp:
+                            grp[new_name] = grp[old_name]
+                            del grp[old_name]
             return
+        # ----------------------------------
 
         if file_type == "MultiCSV":
             delim = last_load_opts.get("delimiter", ",")
@@ -370,7 +394,7 @@ class FileEditor:
 
     @staticmethod
     def delete_column_in_file(file_type, dataset, target_file, col_idx, last_load_opts):
-        # --- NATIVE HDF5 INTERCEPT ---
+        # --- FIXED: NATIVE HDF5 INTERCEPT ---
         if file_type == "HDF5":
             import h5py
             if hasattr(dataset, 'file') and dataset.file:
@@ -378,9 +402,17 @@ class FileEditor:
                 except: pass
             with h5py.File(target_file, 'a') as f:
                 col_name = dataset.column_names.get(col_idx)
-                if col_name and col_name in f:
-                    del f[col_name]
+                if not col_name: return
+                
+                groups = [k for k in f.keys() if isinstance(f[k], h5py.Group)]
+                if not groups:
+                    if col_name in f: del f[col_name]
+                else:
+                    for grp_name in groups:
+                        grp = f[grp_name]
+                        if col_name in grp: del grp[col_name]
             return
+        # ----------------------------------
 
         if file_type == "MultiCSV":
             delim = last_load_opts.get("delimiter", ",")
@@ -520,4 +552,3 @@ class FileEditor:
 
             with open(target_file, "w", encoding='utf-8') as f:
                 f.write("\n".join(out) + "\n")
-
