@@ -50,6 +50,7 @@ from ui.dialogs.fitting import (
 from ui.dialogs.help import HelpDialog
 
 from ui.dialogs.settings import PreferencesDialog
+from ui.dialogs.analysis_hist import SmartBinningDialog, CDFOverlayDialog, SigmaClippingDialog
        
 
 class BadgerLoopQtGraph(QMainWindow):
@@ -2359,12 +2360,16 @@ class BadgerLoopQtGraph(QMainWindow):
         
         self.plot() # Triggers _draw_3d, which instantly renders the mesh!
 
-    def _get_all_plotted_xy(self, apply_selection=False, aux_cols=None):
+    def _get_all_plotted_xy(self, apply_selection=False, aux_cols=None, force_raw=False):
         import numpy as np
         if not self.dataset: return np.array([]), np.array([]), {}, None
+        
         row = max(0, self.series_list.currentRow())
-        if row >= len(self.series_data["2D"]): return np.array([]), np.array([]), {}, None
-        pair = self.series_data["2D"][row]
+        
+        # FIX: Look in the correct memory bank based on plot mode!
+        mode_key = self.plot_mode if self.plot_mode in self.series_data else "2D"
+        if row >= len(self.series_data[mode_key]): return np.array([]), np.array([]), {}, None
+        pair = self.series_data[mode_key][row]
         
         if aux_cols is None: aux_cols = []
         
@@ -2372,12 +2377,12 @@ class BadgerLoopQtGraph(QMainWindow):
         is_fft = getattr(self, 'fft_mode_active', False)
         is_hist = getattr(self, 'plot_mode', '2D') == "Histogram"
 
-        if (is_fft or is_hist) and hasattr(self, 'last_plotted_data'):
+        # ONLY intercept if we haven't explicitly forced it to grab raw data
+        if not force_raw and (is_fft or is_hist) and hasattr(self, 'last_plotted_data'):
             pkgs = [p for p in self.last_plotted_data.get('packages', []) if p.get("pair_idx", 0) == row and p.get("type") == "standard"]
             if pkgs:
                 x_calc = pkgs[0]['x']
                 y_calc = pkgs[0]['y']
-                # Failsafe aux dict (aux cols aren't naturally FFT'd/Binned, so we return zeros to prevent NoneType)
                 aux_dict = {c: np.zeros_like(x_calc) for c in aux_cols}
                 if apply_selection and getattr(self, 'selected_indices', set()):
                     idx = np.array(list(self.selected_indices))
@@ -2385,6 +2390,7 @@ class BadgerLoopQtGraph(QMainWindow):
                     return x_calc[valid_idx], y_calc[valid_idx], {c: v[valid_idx] for c, v in aux_dict.items()}, pair
                 return x_calc, y_calc, aux_dict, pair
 
+        # IF force_raw = True, execution drops down here and grabs the pure unbinned physics data!
         xidx, yidx = pair['x'], pair['y']
         aux_dict = {}
         
@@ -2442,7 +2448,6 @@ class BadgerLoopQtGraph(QMainWindow):
                 
                 if len(x_valid) == 0: continue
                 
-                # --- CRITICAL FIX: AVERAGE THE AUXILIARY COLUMNS TOO! ---
                 if is_averaged:
                     x_list.append(np.array([np.mean(x_valid)]))
                     y_list.append(np.array([np.mean(y_valid)]))
@@ -4364,14 +4369,14 @@ class BadgerLoopQtGraph(QMainWindow):
                 
     def _toggle_hist_stats(self):
         if self.toggle_stats_btn.isChecked():
-            self.toggle_stats_btn.setStyleSheet("font-weight: bold; background-color: #d0e8ff; border: 2px solid #0055ff; border-radius: 4px; padding: 6px; color: #0055ff;")
+            self.toggle_stats_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.primary_bg}; border: 2px solid {theme.primary_border}; border-radius: 4px; padding: 6px; color: {theme.primary_text};")
             if self.plot_mode == "Histogram" and hasattr(self, '_last_hist_html'):
                 self.stats_label.setText(self._last_hist_html)
                 self.stats_label.adjustSize()
                 self.stats_label.show()
                 self.stats_label.raise_()
         else:
-            self.toggle_stats_btn.setStyleSheet("background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black;")
+            self.toggle_stats_btn.setStyleSheet(f"background-color: {theme.bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px; color: {theme.fg};")
             if self.plot_mode == "Histogram":
                 self.stats_label.hide()
 
@@ -4966,7 +4971,9 @@ class BadgerLoopQtGraph(QMainWindow):
             self.plot()
             
         except Exception as e:
-            if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
+            if getattr(self, 'progress_dialog', None) is not None: 
+                try: self.progress_dialog.accept()
+                except: pass
             import traceback
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Load Error", f"Failed to process loaded file:\n\n{e}\n\n{traceback.format_exc()}")
@@ -5221,6 +5228,16 @@ class BadgerLoopQtGraph(QMainWindow):
                 self.plot()
 
     def plot(self):
+        # --- THE GHOST DIALOG KILLER ---
+        # If multiple plot calls cascade, destroy the old dialog before making a new one!
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            try:
+                self.progress_dialog.hide()
+                self.progress_dialog.deleteLater()
+                self.progress_dialog = None
+            except: pass
+        # -------------------------------
+
         if not self.dataset: return
         if getattr(self, '_is_plotting', False) or (hasattr(self, 'plot_thread') and self.plot_thread.isRunning()): return 
         self._is_plotting = True
@@ -5291,6 +5308,7 @@ class BadgerLoopQtGraph(QMainWindow):
             "xidx": xidx, "yidx": yidx, "zidx": zidx,
             "sweeps": self.parse_list(self.sweeps_edit.text()),
             "points": self.parse_list(self.points_edit.text()),
+            "bins": self.bins_edit.text(),
             "xlog": self.xscale.currentText() == "Log", 
             "ylog": self.yscale.currentText() == "Log",
             "zlog": getattr(self, 'zscale', None) and self.zscale.currentText() == "Log",
@@ -5308,7 +5326,9 @@ class BadgerLoopQtGraph(QMainWindow):
         
         if params["sweeps"] == -1: params["sweeps"] = list(range(self.dataset.num_sweeps))
 
-        if hasattr(self, 'progress_dialog'): self.progress_dialog.deleteLater()
+        if getattr(self, 'progress_dialog', None) is not None:
+            try: self.progress_dialog.deleteLater()
+            except: pass
         self.progress_dialog = QProgressDialog("Processing Data...", None, 0, 100, self)
         self.progress_dialog.setWindowTitle("Plotting")
         self.progress_dialog.setWindowModality(Qt.WindowModal) 
@@ -5830,6 +5850,218 @@ class BadgerLoopQtGraph(QMainWindow):
 
         self.plot()
         
+    def open_smart_binning(self):
+        res = self._get_all_plotted_xy(apply_selection=False, force_raw=True) # <--- UPDATED
+        if len(res) < 4 or len(res[1]) == 0: return
+        _, y_data, _, _ = res 
+        
+        from ui.dialogs.analysis_hist import SmartBinningDialog
+        dlg = SmartBinningDialog(y_data, self.bins_edit.text(), self)
+        if dlg.exec() == QDialog.Accepted:
+            self.bins_edit.setText(dlg.get_result())
+            self.plot()
+
+    def open_cdf_overlay(self):
+        res = self._get_all_plotted_xy(apply_selection=False, force_raw=True) # <--- UPDATED
+        if len(res) < 4 or len(res[1]) == 0: return
+        _, y_data, _, pair = res
+        
+        from ui.dialogs.analysis_hist import CDFOverlayDialog
+        dlg = CDFOverlayDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            color, thickness = dlg.get_result()
+            
+            y_sorted = np.sort(y_data[np.isfinite(y_data)])
+            cdf = (np.arange(1, len(y_sorted) + 1) / len(y_sorted)) * 100.0
+            
+            import pyqtgraph as pg
+            cdf_curve = pg.PlotCurveItem(x=y_sorted, y=cdf, pen=pg.mkPen(color, width=thickness))
+            
+            if not hasattr(self, 'active_fits'): self.active_fits = []
+            fit_name = f"CDF ➔ {pair.get('y_name', 'Data')}"
+            
+            self.vb_right.addItem(cdf_curve)
+            self.plot_widget.showAxis('right', show=True)
+            self.plot_widget.getAxis('right').setLabel("Cumulative Probability (%)")
+            self.fit_legend.addItem(cdf_curve, fit_name)
+            
+            self.active_fits.append({
+                "name": fit_name, "type": "CDF", 
+                "plot_item": cdf_curve,
+                "x_raw": y_sorted, "y_raw": cdf,
+                "axis": "R",
+                "params": [], "param_names": [] 
+            })
+            
+            self.save_function_btn.setVisible(True)
+            self.clear_fit_btn.setVisible(True)
+            if hasattr(self, 'func_details_btn'): self.func_details_btn.setVisible(True)
+
+    def open_sigma_clipping(self):
+        # Safely scope all UI elements at the very top of the function
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton, QMessageBox, QProgressDialog
+        from PyQt5.QtCore import Qt
+        import os
+        import glob
+        import re
+        import numpy as np
+
+        if not self.dataset: return
+        res = self._get_all_plotted_xy(apply_selection=False, force_raw=True)
+        if len(res) < 4 or len(res[1]) == 0: return
+        _, y_data, _, pair = res
+        
+        from ui.dialogs.analysis_hist import SigmaClippingDialog
+        dlg = SigmaClippingDialog(y_data, self)
+        
+        if dlg.exec() != QDialog.Accepted: return
+        
+        lower, upper = dlg.get_result()
+        new_name = f"{pair.get('y_name', 'Y')} (Clipped)"
+        
+        calculated_blocks = []
+        yidx = pair['y']
+
+        is_csv = (self.file_type in ["CSV", "ConcatenatedCSV"])
+        if is_csv:
+            block = np.asarray(self.dataset.data[:, yidx], dtype=np.float64).copy()
+            outliers = (block < lower) | (block > upper)
+            block[outliers] = np.nan
+            calculated_blocks.append(block)
+        else:
+            sweeps = self.parse_list(self.sweeps_edit.text())
+            if sweeps == -1: sweeps = list(range(self.dataset.num_sweeps))
+            
+            for sw_idx in range(self.dataset.num_sweeps):
+                if sw_idx in sweeps and sw_idx < len(self.dataset.sweeps):
+                    block = np.asarray(self.dataset.sweeps[sw_idx].data[:, yidx], dtype=np.float64).copy()
+                    outliers = (block < lower) | (block > upper)
+                    block[outliers] = np.nan
+                    calculated_blocks.append(block)
+                else:
+                    if sw_idx < len(self.dataset.sweeps):
+                        block = np.full(len(self.dataset.sweeps[sw_idx].data), np.nan)
+                        calculated_blocks.append(block)
+        
+        if self.file_type == "MultiCSV":
+            self._intercept_folder_edit(lambda: self._execute_sigma_clipping(new_name, calculated_blocks))
+            return
+            
+        fname = self.dataset.filename
+        orig_name = os.path.basename(fname)
+        directory = os.path.dirname(fname)
+
+        if not orig_name.startswith("MIRROR_") and self.file_type != "ConcatenatedCSV":
+            name_only, ext = os.path.splitext(orig_name)
+            search_pattern = os.path.join(directory, f"MIRROR_{name_only}*{ext}")
+            existing_mirrors = [os.path.basename(p) for p in glob.glob(search_pattern)]
+
+            if not existing_mirrors:
+                target_file = os.path.join(directory, f"MIRROR_{orig_name}")
+                try: 
+                    if self.file_type in ["CSV", "ConcatenatedCSV"]: self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to create mirror:\n{e}")
+                    return
+                QMessageBox.information(self, "Mirror Created", "To protect original data, a Mirror file has been created and loaded.")
+            else:
+                dlg_mirror = QDialog(self)
+                dlg_mirror.setWindowTitle("Mirror File Exists")
+                dlg_mirror.setFixedSize(450, 150)
+                l = QVBoxLayout(dlg_mirror)
+                l.addWidget(QLabel("Select an existing mirror to load, or create a new one:"))
+                combo = QComboBox()
+                combo.addItem("--- Create New Mirror ---")
+                combo.addItems(existing_mirrors)
+                l.addWidget(combo)
+                
+                btn_box = QHBoxLayout()
+                ok, cancel = QPushButton("OK"), QPushButton("Cancel")
+                btn_box.addWidget(ok); btn_box.addWidget(cancel)
+                l.addLayout(btn_box)
+                
+                ok.clicked.connect(dlg_mirror.accept); cancel.clicked.connect(dlg_mirror.reject)
+                if dlg_mirror.exec() != QDialog.Accepted: return
+                
+                choice = combo.currentText()
+                if choice == "--- Create New Mirror ---":
+                    max_num = max([int(m.group(1)) for m in [re.search(r'\((\d+)\)', x) for x in existing_mirrors] if m] + [1 if f"MIRROR_{orig_name}" in existing_mirrors else 0])
+                    new_mirror_name = f"MIRROR_{name_only} ({max_num + 1}){ext}"
+                    target_file = os.path.join(directory, new_mirror_name)
+                    
+                    if self.file_type in ["CSV", "ConcatenatedCSV"]: self._write_csv_mirror(target_file)
+                    else:
+                        import shutil
+                        shutil.copy2(fname, target_file)
+                else:
+                    target_file = os.path.join(directory, choice)
+
+            opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+            if self.file_type == "CSV": opts["delimiter"] = ","
+                
+            self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setCancelButton(None) 
+            self.progress_dialog.setMinimumDuration(0) 
+            self.progress_dialog.show()
+
+            # --- FIX: Mute the plot engine during the intermediate load! ---
+            def on_mirror_loaded(dataset):
+                if getattr(self, 'progress_dialog', None) is not None:
+                    try: self.progress_dialog.accept()
+                    except: pass
+                
+                self._is_plotting = True # MUTE plotting
+                self._on_load_finished(dataset, target_file, opts)
+                self._is_plotting = False # UNMUTE plotting
+                
+                self._execute_sigma_clipping(new_name, calculated_blocks) 
+            # ---------------------------------------------------------------
+
+            from core.data_loader import DataLoaderThread
+            self.loader_thread = DataLoaderThread(target_file, opts)
+            self.loader_thread.progress.connect(self._update_progress_ui)
+            self.loader_thread.finished.connect(on_mirror_loaded)
+            self.loader_thread.error.connect(self._on_load_error)
+            self.loader_thread.start()
+            return
+
+        self._execute_sigma_clipping(new_name, calculated_blocks)
+
+    def _execute_sigma_clipping(self, new_name, calculated_blocks):
+        self._append_column_to_file(self.dataset.filename, new_name, calculated_blocks)
+        
+        opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
+        from PyQt5.QtWidgets import QProgressDialog, QApplication
+        from PyQt5.QtCore import Qt
+        
+        self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.show()
+        QApplication.processEvents()
+        
+        target_file = self.dataset.filename
+        
+        # --- FIX: Safely handle the final dialog close ---
+        def on_refresh_done(ds):
+            if getattr(self, 'progress_dialog', None) is not None:
+                try: self.progress_dialog.accept()
+                except: pass
+            self._on_load_finished(ds, target_file, opts)
+        # -------------------------------------------------
+        
+        from core.data_loader import DataLoaderThread
+        self.loader_thread = DataLoaderThread(target_file, opts)
+        self.loader_thread.progress.connect(self._update_progress_ui)
+        self.loader_thread.finished.connect(on_refresh_done)
+        self.loader_thread.error.connect(self._on_load_error)
+        self.loader_thread.start()
+        
     def _update_context_menus(self):
         if not hasattr(self, 'analysis_menu') or not hasattr(self, 'fitting_menu'):
             return
@@ -5881,7 +6113,9 @@ class BadgerLoopQtGraph(QMainWindow):
 
         elif mode == "Histogram":
             # --- HISTOGRAM ANALYSIS ---
-            self.analysis_menu.addAction("Calculate Distribution Statistics").triggered.connect(lambda: print("Launch Distribution Stats"))
+            self.analysis_menu.addAction("Smart Binning Optimiser").triggered.connect(self.open_smart_binning)
+            self.analysis_menu.addAction("Overlay Cumulative Distribution (CDF)").triggered.connect(self.open_cdf_overlay)
+            self.analysis_menu.addAction("Sigma Clipping (Outlier Removal)").triggered.connect(self.open_sigma_clipping)
 
             # --- HISTOGRAM FITTING ---
             self.fitting_menu.addAction("Fit Probability Density Function (PDF)").triggered.connect(lambda: print("Launch PDF Fit"))
