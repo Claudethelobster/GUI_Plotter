@@ -1627,39 +1627,47 @@ class BadgerLoopQtGraph(QMainWindow):
         if dlg.exec() == QDialog.Accepted:
             new_settings = dlg.get_results()
             
-            # --- HANDLE PORTABLE MODE MIGRATION ---
-            is_portable = new_settings["portable_mode"]
-            local_ini = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "settings.ini")
-            
-            if is_portable and not was_portable:
-                # Migrate System Registry -> Local INI
-                new_settings_obj = QSettings(local_ini, QSettings.IniFormat)
-                for key in self.settings.allKeys():
-                    new_settings_obj.setValue(key, self.settings.value(key))
-                self.settings = new_settings_obj
-            elif not is_portable and was_portable:
-                # Migrate Local INI -> System Registry
-                new_settings_obj = QSettings("BadgerLoop", "QtPlotter")
-                for key in self.settings.allKeys():
-                    new_settings_obj.setValue(key, self.settings.value(key))
-                self.settings = new_settings_obj
-                if os.path.exists(local_ini):
-                    try: os.remove(local_ini)
-                    except: pass
-            # --------------------------------------
+            # ... (Keep your portable mode migration logic exactly the same) ...
             
             # Save the new values
             for key, val in new_settings.items():
                 self.settings.setValue(key, val)
                 
-            # Apply live updates
+            # Check if the dialog requested a reboot (Monitor Change)
+            if getattr(dlg, 'requires_restart', False):
+                self._restart_programme()
+                return # Halt execution here so we don't process live updates
+                
+            # --- LIVE UPDATE: Apply window resolution changes instantly! ---
+            self._apply_window_sizing()
+            # ---------------------------------------------------------------
+                
+            # Apply live updates for crosshairs and themes
             if hasattr(self, 'proxy'):
-                self.proxy.disconnect() # Kill the old proxy
-                # Rebuild it from scratch with the new rate limit
+                self.proxy.disconnect() 
                 self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=new_settings["crosshair_poll_rate"], slot=self.mouse_moved)
                 
             if new_settings["dark_mode"] != was_dark:
-                QMessageBox.information(self, "Restart Required", "Theme changes will fully take effect after you restart the application.")
+                QMessageBox.information(self, "Restart Required", "Theme changes will fully take effect after you restart the programme.")
+        
+    def _restart_programme(self):
+        """ Spawns a fresh instance of the application and brutally kills the current one. """
+        import sys
+        import os
+        import subprocess
+        
+        # 1. Trigger the normal close event so it safely saves all your 
+        # current UI states (like the legend visibility) to the settings.
+        self.close()
+        
+        # 2. Force Qt to write those settings to the hard drive immediately
+        self.settings.sync() 
+        
+        # 3. Launch the brand new instance 
+        subprocess.Popen([sys.executable] + sys.argv)
+        
+        # 4. Pull the plug on the current process so it cannot linger
+        os._exit(0)
         
     def manage_columns_dialog(self):
         if not self.dataset: return
@@ -4110,6 +4118,73 @@ class BadgerLoopQtGraph(QMainWindow):
         self.original_plot_stack_resize(event)
         self._resize_plot_widget()
         
+    def _apply_window_sizing(self):
+        """ Applies either dynamic free-dragging or locked scaling-aware resolution. """
+        is_dynamic = self.settings.value("dynamic_resolution", False, bool)
+        
+        if is_dynamic:
+            # Unlock the window entirely so the user can drag and resize it natively
+            self.setMinimumSize(0, 0)
+            self.setMaximumSize(16777215, 16777215)
+            return # Exit early, skipping all teleportation and locking logic!
+
+        from PyQt5.QtWidgets import QApplication
+        screens = QApplication.screens()
+        
+        try:
+            target_monitor = int(self.settings.value("target_monitor", 0))
+        except ValueError:
+            target_monitor = 0
+            
+        if target_monitor < 0 or target_monitor >= len(screens):
+            target_monitor = 0
+            
+        target_screen = screens[target_monitor]
+        
+        # 1. TELEPORT FIRST to force Windows to update the window's internal DPI
+        geom = target_screen.geometry()
+        self.move(geom.x() + 50, geom.y() + 50)
+        
+        if self.windowHandle():
+            self.windowHandle().setScreen(target_screen)
+            
+        # Let the OS catch up and assign the correct 100% or 125% scale factor!
+        QApplication.processEvents() 
+        
+        # 2. NOW calculate the geometry based on the correct DPI
+        avail_geom = target_screen.availableGeometry() 
+        scale_factor = target_screen.devicePixelRatio() 
+        
+        target_res = self.settings.value("target_resolution", "MAX")
+        
+        if target_res == "MAX":
+            self.setMinimumSize(0, 0)
+            self.setMaximumSize(16777215, 16777215)
+            self.showMaximized()
+        else:
+            try:
+                self.showNormal() 
+                w_phys, h_phys = map(int, target_res.split('x'))
+                
+                # Convert physical pixels back to logical pixels for Qt
+                w_log = int(w_phys / scale_factor)
+                h_log = int(h_phys / scale_factor)
+                
+                self.setFixedSize(w_log, h_log)
+                
+                x_centre = avail_geom.x() + (avail_geom.width() - w_log) // 2
+                y_centre = avail_geom.y() + (avail_geom.height() - h_log) // 2
+                self.move(x_centre, y_centre)
+                
+            except Exception as e:
+                print(f"Failed to apply custom resolution: {e}")
+                self.showMaximized()
+                
+        # 3. Force PyQtGraph to rebuild its canvas at the new DPI to prevent graphics tearing
+        if self.dataset:
+            self._is_plotting = False
+            self.plot()
+        
     def _resize_plot_widget(self):
         ratio = self.get_aspect_ratio()
         if ratio is None:
@@ -4217,9 +4292,12 @@ class BadgerLoopQtGraph(QMainWindow):
                 
             self.setStyleSheet("""
                 QPushButton { background-color: #444; border: 1px solid #666; border-radius: 4px; padding: 6px; color: white; }
-                QPushButton:hover { background-color: #555; }
-                QPushButton:pressed { background-color: #333; }
+                QPushButton:hover:!disabled { background-color: #555; }
+                QPushButton:pressed:!disabled { background-color: #333; }
+                QPushButton:disabled { background-color: #333; color: #777; border: 1px solid #444; }
+                
                 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background-color: #222; color: white; border: 1px solid #555; padding: 4px; }
+                QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background-color: #333; color: #777; border: 1px solid #444; }
                 
                 /* DARK MODE TAB STYLES */
                 QTabWidget::pane { border: 1px solid #555; background-color: #353535; }
@@ -4233,13 +4311,16 @@ class BadgerLoopQtGraph(QMainWindow):
         # --- LIGHT MODE ENGINE ---
         if app: 
             app.setStyle("Fusion")
-            app.setPalette(app.style().standardPalette()) # CRITICAL FIX: Restores default OS colors!
+            app.setPalette(app.style().standardPalette()) 
             
         self.setStyleSheet("""
             QPushButton { background-color: #f5f5f5; border: 1px solid #8a8a8a; border-radius: 4px; padding: 6px; color: black; }
-            QPushButton:hover { background-color: #e6e6e6; }
-            QPushButton:pressed { background-color: #d0d0d0; }
+            QPushButton:hover:!disabled { background-color: #e6e6e6; }
+            QPushButton:pressed:!disabled { background-color: #d0d0d0; }
+            QPushButton:disabled { background-color: #e0e0e0; color: #999; border: 1px solid #ccc; }
+            
             QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background-color: white; color: black; border: 1px solid #8a8a8a; padding: 4px; }
+            QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background-color: #f0f0f0; color: #999; border: 1px solid #ccc; }
         """)
 
     def _init_3d_scene(self, data_bounds=None, scales=(1.0, 1.0, 1.0)):
@@ -4381,7 +4462,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 self.stats_label.hide()
 
     def restore_state(self):
-        if geo := self.settings.value("geometry"): self.restoreGeometry(geo)
+        self._apply_window_sizing()
         
         self.legend_visible = self.settings.value("legend", True, bool)
         self.fit_legend.setVisible(self.legend_visible)
@@ -4579,7 +4660,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 self.file_type = "BadgerLoop"
 
     def closeEvent(self, e):
-        self.settings.setValue("geometry", self.saveGeometry())
+        # self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("legend", self.legend_visible)
         self.settings.setValue("legend_aliases", json.dumps(self.legend_aliases))
         self.settings.setValue("last_file", self.last_file)
