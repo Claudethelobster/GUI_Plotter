@@ -2,7 +2,7 @@
 import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
-from PyQt5.QtCore import QObject, QEvent, Qt
+from PyQt6.QtCore import QObject, QEvent, Qt
 
 from core.theme import theme
 from ui.custom_widgets import DraggableLabel
@@ -175,14 +175,14 @@ class Crosshair3DManager(QObject):
     def eventFilter(self, source, event):
         if source == self.gl_widget:
             if not self.locked:
-                if event.type() in [QEvent.MouseMove, QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.Wheel]:
-                    if event.type() == QEvent.MouseMove and event.buttons() == Qt.NoButton:
+                if event.type() in [QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.Wheel]:
+                    if event.type() == QEvent.Type.MouseMove and event.buttons() == Qt.MouseButton.NoButton:
                         self._handle_mouse_move(event.pos())
-                    elif event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                    elif event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                         self.set_locked(True) 
                     return True 
             else:
-                if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+                if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
                     self.set_locked(False)
                     return True
         return super().eventFilter(source, event)

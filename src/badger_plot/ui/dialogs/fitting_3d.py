@@ -2,8 +2,8 @@
 import re
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QComboBox, QLineEdit, QLabel, QPushButton, QTableWidget, QHeaderView,
     QScrollArea, QWidget, QTextEdit, QInputDialog
@@ -37,16 +37,16 @@ class Fit3DSurfaceDialog(QDialog):
         layout.addLayout(form)
         
         self.eq_label = QLabel()
-        self.eq_label.setAlignment(Qt.AlignCenter)
+        self.eq_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.eq_label)
         
         layout.addWidget(QLabel("<b>Parameter Controls:</b>"))
         self.param_table = QTableWidget()
         self.param_table.setColumnCount(3)
         self.param_table.setHorizontalHeaderLabels(["Parameter", "Mode", "Value / Guess"])
-        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.param_table.verticalHeader().setVisible(False)
         self.param_table.setAlternatingRowColors(True)
         layout.addWidget(self.param_table)
@@ -142,7 +142,7 @@ class Fit3DSurfaceDialog(QDialog):
         
         for i, (name, label) in enumerate(zip(self.param_names, param_labels)):
             lbl = QLabel(label)
-            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet("font-size: 16px; font-family: Cambria, serif; font-style: italic;")
             self.param_table.setCellWidget(i, 0, lbl)
             
@@ -422,7 +422,7 @@ class CustomFit3DDialog(QDialog):
         self.param_scroll.setMaximumHeight(200)
         self.param_scroll_widget = QWidget()
         self.param_btn_layout = QVBoxLayout(self.param_scroll_widget)
-        self.param_btn_layout.setAlignment(Qt.AlignTop)
+        self.param_btn_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.param_scroll.setWidget(self.param_scroll_widget)
         layout.addWidget(self.param_scroll)
 
@@ -446,21 +446,21 @@ class CustomFit3DDialog(QDialog):
         layout.addLayout(math_lbl_layout)
         
         self.equation_input = QTextEdit()
-        self.equation_input.setLineWrapMode(QTextEdit.NoWrap) 
-        self.equation_input.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.equation_input.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap) 
+        self.equation_input.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.equation_input.setMaximumHeight(80)
         self.equation_input.setFont(pg.QtGui.QFont("Consolas", 11))
         self.equation_input.textChanged.connect(self.update_preview)
         layout.addWidget(self.equation_input)
 
         self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setStyleSheet(f"background-color: {theme.panel_bg}; color: {theme.fg}; border: 1px solid {theme.border}; font-size: 22px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(True)
         self.preview_scroll.setWidget(self.preview_label)
         self.preview_scroll.setMinimumHeight(100)
-        self.preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         layout.addWidget(self.preview_scroll)
 
         # 4. Settings
@@ -468,9 +468,9 @@ class CustomFit3DDialog(QDialog):
         self.param_table = QTableWidget()
         self.param_table.setColumnCount(3)
         self.param_table.setHorizontalHeaderLabels(["Parameter", "Mode", "Value / Guess"])
-        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.param_table.verticalHeader().setVisible(False)
         layout.addWidget(self.param_table)
 
@@ -509,7 +509,7 @@ class CustomFit3DDialog(QDialog):
         layout.addLayout(btn_box)
         
     def load_function(self):
-        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
         fname, _ = QFileDialog.getOpenFileName(self, "Load 3D Function", "", "Text files (*.txt)")
         if not fname: return
 
@@ -835,7 +835,7 @@ class CustomFit3DDialog(QDialog):
 
     def open_constants(self):
         dlg = ConstantsDialog(self)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_key:
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_key:
             self.equation_input.textCursor().insertText(f"{{\\{dlg.selected_key}}}")
 
     def add_parameter(self):
@@ -868,7 +868,7 @@ class CustomFit3DDialog(QDialog):
         self.param_table.insertRow(row)
 
         name_lbl = QLabel(p_name)
-        name_lbl.setAlignment(Qt.AlignCenter)
+        name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         name_lbl.setStyleSheet(f"font-weight: bold; color: {theme.warning_text};")
         self.param_table.setCellWidget(row, 0, name_lbl)
 
@@ -877,7 +877,7 @@ class CustomFit3DDialog(QDialog):
         self.param_table.setCellWidget(row, 1, mode_combo)
 
         val_edit = QLineEdit("1.0")
-        val_edit.setAlignment(Qt.AlignCenter)
+        val_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.param_table.setCellWidget(row, 2, val_edit)
 
         self.param_configs[p_name] = {"mode": mode_combo, "val": val_edit}
@@ -1013,7 +1013,7 @@ class CustomFit3DDialog(QDialog):
         self._check_boxes_filled()
 
     def run_global_search(self):
-        from PyQt5.QtWidgets import QProgressDialog, QMessageBox
+        from PyQt6.QtWidgets import QProgressDialog, QMessageBox
         if not self.is_valid or not self.parameters: return
         x, y, z = self._get_3d_data()
         if x is None: return
@@ -1180,7 +1180,7 @@ class CustomFit3DDialog(QDialog):
         self.opt_worker = LocalWorker(execute_scipy)
 
         def on_success(result):
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             final_params, pcov = result
             self.latest_pcov = pcov # Save to memory for get_result()
             self._opt_cycles += 1
@@ -1207,11 +1207,11 @@ class CustomFit3DDialog(QDialog):
                 
             # Otherwise, keep looping
             elif getattr(self, '_is_optimizing', False):
-                from PyQt5.QtCore import QTimer
+                from PyQt6.QtCore import QTimer
                 QTimer.singleShot(10, self._run_opt_step)
 
         def on_err(err_str):
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             self.stop_optimization()
             QMessageBox.warning(self, "Optimization Error", f"Failed to optimize parameters:\n{err_str}")
 

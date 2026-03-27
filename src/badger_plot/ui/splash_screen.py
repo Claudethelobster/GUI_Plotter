@@ -3,8 +3,8 @@ import sys
 import time
 import importlib
 import random
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar, QApplication
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar, QApplication
 
 EGG_FACTS = [
     "A standard chef's hat has 100 folds, representing 100 ways to cook an egg.",
@@ -52,9 +52,9 @@ EGG_FACTS = [
 class SplashLoader(QWidget):
     def __init__(self):
         super().__init__()
-        # Make it a frameless floating window that stays on top
-        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
-        self.setFixedSize(450, 180) # Slightly wider and taller for the fact text
+        # PyQt6 Update: WindowType
+        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint)
+        self.setFixedSize(450, 180) 
         self.setStyleSheet("background-color: #2b2b2b; color: white; border: 2px solid #555; border-radius: 8px;")
         
         layout = QVBoxLayout(self)
@@ -62,12 +62,13 @@ class SplashLoader(QWidget):
         
         title = QLabel("EggPlot Data Plotter")
         title.setStyleSheet("font-size: 20px; font-weight: bold; border: none;")
-        title.setAlignment(Qt.AlignCenter)
+        # PyQt6 Update: AlignmentFlag
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         self.status_label = QLabel("Initialising...")
         self.status_label.setStyleSheet("font-size: 12px; color: #aaa; border: none;")
-        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.status_label)
         
         self.progress = QProgressBar()
@@ -77,17 +78,15 @@ class SplashLoader(QWidget):
         """)
         layout.addWidget(self.progress)
         
-        # --- NEW: Random Egg Fact Label ---
         self.fact_label = QLabel(f"Did you know? {random.choice(EGG_FACTS)}")
         self.fact_label.setWordWrap(True)
-        self.fact_label.setAlignment(Qt.AlignCenter)
+        self.fact_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.fact_label.setStyleSheet("font-size: 11px; font-style: italic; color: #888; border: none; padding-top: 10px;")
         layout.addWidget(self.fact_label)
 
     def load_heavy_modules(self):
         """ Sequentially imports heavy libraries and updates the UI. """
         
-        # Add any modules here that cause startup lag
         modules_to_load = [
             ("numpy", "Loading numerical engine..."),
             ("scipy", "Loading scientific libraries..."),
@@ -104,11 +103,8 @@ class SplashLoader(QWidget):
             self.status_label.setText(desc)
             self.progress.setValue(int((i / total) * 100))
             
-            # 1. Force the widget to physically redraw the text right now
             self.repaint() 
-            # 2. Process any pending OS events
             QApplication.processEvents()
-            # 3. Give the monitor 50 milliseconds to actually display the frame
             time.sleep(0.05) 
             
             try:
@@ -116,20 +112,15 @@ class SplashLoader(QWidget):
             except ImportError:
                 pass 
                 
-        # --- Change colour to green and text, but keep it full ---
         self.progress.setValue(100)
         self.status_label.setText("Building main window...")
         
-        # Dynamically swap the chunk colour to green to indicate a successful load
         self.progress.setStyleSheet("""
             QProgressBar { border: 1px solid #555; border-radius: 4px; text-align: center; color: white; font-weight: bold; }
             QProgressBar::chunk { background-color: #28a745; border-radius: 3px; }
         """)
         self.progress.setFormat("Please wait...")
         
-        # Force the OS to paint this final frame before the thread locks
         self.repaint()
         QApplication.processEvents()
-        
-        # A tiny sleep just to ensure the monitor physically draws the green bar
         time.sleep(0.1)

@@ -4,8 +4,8 @@ import re
 import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters as pgexp
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import (
     QDialog, QMainWindow, QVBoxLayout, QHBoxLayout, QFormLayout,
     QComboBox, QLineEdit, QLabel, QPushButton, QTableWidget, QHeaderView,
     QScrollArea, QWidget, QFileDialog, QMessageBox, QApplication, QTextEdit
@@ -43,16 +43,16 @@ class FitFunctionDialog(QDialog):
         layout.addLayout(form)
         
         self.eq_label = QLabel()
-        self.eq_label.setAlignment(Qt.AlignCenter)
+        self.eq_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.eq_label)
         
         layout.addWidget(QLabel("<b>Parameter Controls:</b>"))
         self.param_table = QTableWidget()
         self.param_table.setColumnCount(3)
         self.param_table.setHorizontalHeaderLabels(["Parameter", "Mode", "Value / Guess"])
-        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.param_table.verticalHeader().setVisible(False)
         self.param_table.setAlternatingRowColors(True)
         layout.addWidget(self.param_table)
@@ -138,7 +138,7 @@ class FitFunctionDialog(QDialog):
         
         for i, (name, label) in enumerate(zip(self.param_names, param_labels)):
             lbl = QLabel(label)
-            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet("font-size: 16px; font-family: Cambria, serif; font-style: italic;")
             self.param_table.setCellWidget(i, 0, lbl)
             
@@ -547,7 +547,7 @@ class CustomFitDialog(QDialog):
         
         self.param_scroll_widget = QWidget()
         self.param_btn_layout = QVBoxLayout(self.param_scroll_widget)
-        self.param_btn_layout.setAlignment(Qt.AlignTop) 
+        self.param_btn_layout.setAlignment(Qt.AlignmentFlag.AlignTop) 
         
         self.param_scroll.setWidget(self.param_scroll_widget)
         layout.addWidget(self.param_scroll)
@@ -573,8 +573,8 @@ class CustomFitDialog(QDialog):
         
         self.equation_input = QTextEdit()
         # --- NEW: Horizontal scrolling for long equations ---
-        self.equation_input.setLineWrapMode(QTextEdit.NoWrap) 
-        self.equation_input.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.equation_input.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap) 
+        self.equation_input.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # ----------------------------------------------------
         self.equation_input.setMaximumHeight(80)
         self.equation_input.setFont(pg.QtGui.QFont("Consolas", 11))
@@ -582,7 +582,7 @@ class CustomFitDialog(QDialog):
         layout.addWidget(self.equation_input)
 
         self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setStyleSheet(f"background-color: {theme.panel_bg}; color: {theme.fg}; border: 1px solid {theme.border}; font-size: 22px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
         
         # --- NEW: Scroll Area for the Live Preview ---
@@ -590,7 +590,7 @@ class CustomFitDialog(QDialog):
         self.preview_scroll.setWidgetResizable(True)
         self.preview_scroll.setWidget(self.preview_label) # <-- Fixed variable name
         self.preview_scroll.setMinimumHeight(100)
-        self.preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         layout.addWidget(self.preview_scroll)
         # ---------------------------------------------
 
@@ -598,9 +598,9 @@ class CustomFitDialog(QDialog):
         self.param_table = QTableWidget()
         self.param_table.setColumnCount(3)
         self.param_table.setHorizontalHeaderLabels(["Parameter", "Mode", "Value / Guess"])
-        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.param_table.verticalHeader().setVisible(False)
         layout.addWidget(self.param_table)
 
@@ -651,7 +651,7 @@ class CustomFitDialog(QDialog):
         if template_name == "Template...": return
 
         if template_name == "Nth Order Polynomial":
-            from PyQt5.QtWidgets import QInputDialog
+            from PyQt6.QtWidgets import QInputDialog
             # Pop up a dialog asking for the degree (default 2, min 1, max 100)
             deg, ok = QInputDialog.getInt(self, "Polynomial Degree", "Enter polynomial degree (n):", 2, 1, 100)
             if not ok:
@@ -737,7 +737,7 @@ class CustomFitDialog(QDialog):
         self.update_preview()
 
     def load_custom_function(self):
-        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
         fname, _ = QFileDialog.getOpenFileName(self, "Load Saved Function", "", "Text files (*.txt)")
         if not fname: return
         
@@ -1032,12 +1032,12 @@ class CustomFitDialog(QDialog):
             # -------------------------------------------------------
             
             import pyqtgraph as pg
-            from PyQt5.QtCore import Qt
+            from PyQt6.QtCore import Qt
             
             if not hasattr(self.parent_gui, 'phantom_curve'):
                 # --- FIX: Enable hardware clipping to stop dashed line lag ---
                 self.parent_gui.phantom_curve = pg.PlotCurveItem(
-                    pen=pg.mkPen("m", width=3, style=Qt.DotLine),
+                    pen=pg.mkPen("m", width=3, style=Qt.PenStyle.DotLine),
                     clipToView=True, autoDownsample=True
                 )
                 self.parent_gui.plot_widget.addItem(self.parent_gui.phantom_curve)
@@ -1138,7 +1138,7 @@ class CustomFitDialog(QDialog):
                 
             # 3. Otherwise, keep looping
             elif getattr(self, '_is_optimizing', False):
-                from PyQt5.QtCore import QTimer
+                from PyQt6.QtCore import QTimer
                 QTimer.singleShot(10, self._run_opt_step)
                 
         def on_err(err_str):
@@ -1151,7 +1151,7 @@ class CustomFitDialog(QDialog):
 
     def open_constants(self):
         dlg = ConstantsDialog(self)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_key:
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_key:
             self.equation_input.textCursor().insertText(f"{{\\{dlg.selected_key}}}")
 
     def add_parameter(self):
@@ -1173,7 +1173,7 @@ class CustomFitDialog(QDialog):
         self.param_table.insertRow(row)
         
         lbl = QLabel(display_name)
-        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet(f"font-weight: bold; color: {theme.warning_text}; font-size: 16px;")
         self.param_table.setCellWidget(row, 0, lbl)
         
@@ -1373,7 +1373,7 @@ class CustomFitDialog(QDialog):
 
     def run_global_search(self):
         import numpy as np
-        from PyQt5.QtWidgets import QProgressDialog, QMessageBox
+        from PyQt6.QtWidgets import QProgressDialog, QMessageBox
         
         if not self.is_valid or not self.parameters: return
         
@@ -1609,7 +1609,7 @@ class FitDataToFunctionWindow(QMainWindow):
         layout.addWidget(self.plot_widget, 1)
 
     def load_function(self):
-        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
         import numpy as np
         import re
 

@@ -5,7 +5,7 @@ import time
 import builtins
 import traceback
 import numpy as np
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal # <-- Updated to PyQt6
 import h5py
 
 # --- SAFE IMPORT FOR NATIVE BADGERLOOP FILES ---
@@ -16,6 +16,7 @@ except ImportError:
     BADGERLOOP_AVAILABLE = False
     # Create a dummy class so the script doesn't throw NameErrors before catching it
     class Dataset: pass 
+
 
 
 class TrackedFile:

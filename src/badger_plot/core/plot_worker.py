@@ -2,7 +2,7 @@
 import time
 import traceback
 import numpy as np
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal # <-- Updated to PyQt6
 
 class PlotWorkerThread(QThread):
     progress = pyqtSignal(int, str)

@@ -1,7 +1,7 @@
 import os
 import json
-from PyQt5.QtCore import Qt, QSettings
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, 
     QFormLayout, QCheckBox, QLineEdit, QPushButton, QLabel, 
     QSlider, QFileDialog, QMessageBox, QComboBox, QApplication
@@ -83,10 +83,10 @@ class PreferencesDialog(QDialog):
             ans = QMessageBox.question(
                 self, "Restart Required", 
                 "Changing the target monitor in Fixed Mode requires the programme to restart to apply the correct Windows scaling.\n\nWould you like to save and restart now?", 
-                QMessageBox.Yes | QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             
-            if ans == QMessageBox.Yes:
+            if ans == QMessageBox.StandardButton.Yes:
                 self.requires_restart = True
                 self.accept()
             else:
@@ -206,9 +206,9 @@ class PreferencesDialog(QDialog):
         
         # Polling Rate Slider
         poll_lay = QHBoxLayout()
-        self.poll_slider = QSlider(Qt.Horizontal)
+        self.poll_slider = QSlider(Qt.Orientation.Horizontal)
         self.poll_slider.setRange(10, 120)
-        self.poll_slider.setTickPosition(QSlider.TicksBelow)
+        self.poll_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.poll_slider.setTickInterval(10)
         
         self.poll_lbl = QLabel("60 Hz")
@@ -269,9 +269,9 @@ class PreferencesDialog(QDialog):
         ans = QMessageBox.warning(
             self, "Factory Reset", 
             "Are you sure you want to completely wipe all EggPlot settings, custom equations, and formatting defaults?\n\nThis cannot be undone.",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if ans == QMessageBox.Yes:
+        if ans == QMessageBox.StandardButton.Yes:
             self.settings.clear()
             QMessageBox.information(self, "Reset Complete", "Settings wiped. Please restart EggPlot.")
             self.accept()

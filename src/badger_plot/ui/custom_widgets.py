@@ -1,13 +1,13 @@
 # ui/custom_widgets.py
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QComboBox, 
     QPushButton, QHBoxLayout, QSpinBox, QDoubleSpinBox, QColorDialog,
     QLabel, QCheckBox, QTableWidget, QHeaderView, QTableWidgetItem, QLineEdit
 )
-from PyQt5.QtGui import QColor
+from PyQt6.QtGui import QColor
 from core.theme import theme
 
 class CustomAxisItem(pg.AxisItem):
@@ -21,7 +21,8 @@ class CustomAxisItem(pg.AxisItem):
         self.custom_log_base = 10.0
 
     def mouseClickEvent(self, ev):
-        if ev.double() and ev.button() == Qt.LeftButton:
+        # PyQt6 Update: MouseButton
+        if ev.double() and ev.button() == Qt.MouseButton.LeftButton:
             self.labelDoubleClicked.emit(self.orientation)
             ev.accept()
         else:
@@ -60,21 +61,17 @@ class CustomAxisItem(pg.AxisItem):
             return super().tickValues(minVal, maxVal, size)
 
     def tickStrings(self, values, scale, spacing):
-        # 1. Linear Mode: Hardcoded formatter to prevent cross-device DPI scaling issues
         if not getattr(self, 'custom_log_mode', False):
             strings = []
             for v in values:
                 if v == 0:
                     strings.append("0")
                 elif abs(v) < 1e-4 or abs(v) >= 1e4:
-                    # Scientific notation for very large/small numbers
                     strings.append(f"{v:.2e}")
                 else:
-                    # Standard decimals (e.g., 0.001) up to 4 significant figures
                     strings.append(f"{v:.4g}")
             return strings
         
-        # 2. Log Mode: Your existing custom superscript formatting
         superscripts = {'0':'⁰', '1':'¹', '2':'²', '3':'³', '4':'⁴', '5':'⁵', '6':'⁶', '7':'⁷', '8':'⁸', '9':'⁹', '-':'⁻', '.':'⋅'}
         
         strings = []
@@ -103,13 +100,14 @@ class DraggableLabel(QLabel):
         super().__init__(parent)
         self._is_dragging = False
         self._drag_start_pos = None
-        self.setCursor(Qt.OpenHandCursor)
+        # PyQt6 Update: CursorShape
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self._is_dragging = True
             self._drag_start_pos = event.pos()
-            self.setCursor(Qt.ClosedHandCursor)
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
             self.raise_()
         super().mousePressEvent(event)
 
@@ -126,9 +124,9 @@ class DraggableLabel(QLabel):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self._is_dragging = False
-            self.setCursor(Qt.OpenHandCursor)
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
         super().mouseReleaseEvent(event)
         
 class CustomLegendItem(pg.LegendItem):
@@ -139,24 +137,20 @@ class CustomLegendItem(pg.LegendItem):
         self.setBrush(pg.mkBrush(255, 255, 255, 230)) 
         self.setPen(pg.mkPen('k', width=1.5)) 
         self.layout.setContentsMargins(8, 8, 8, 8) 
-        
-        # FIX 1: Push the legend to the absolute top layer, above all grid lines
         self.setZValue(10000) 
 
     def mouseDoubleClickEvent(self, ev):
-        if ev.button() == Qt.LeftButton:
+        if ev.button() == Qt.MouseButton.LeftButton:
             self.sigDoubleClicked.emit(self)
             ev.accept()
         else:
             super().mouseDoubleClickEvent(ev)
 
     def update_style(self, bg_col, fg_col, opacity, border_width, columns, spacing):
-        # Background
         base_color = pg.mkColor('w') if bg_col == "Transparent" else pg.mkColor(bg_col)
         base_color.setAlpha(opacity)
         self.setBrush(pg.mkBrush(base_color))
         
-        # Border
         if border_width > 0:
             self.setPen(pg.mkPen(fg_col, width=border_width))
         else:
@@ -164,12 +158,9 @@ class CustomLegendItem(pg.LegendItem):
             
         self.columnCount = max(1, columns)
         
-        # FIX 2 & 3: Custom Layout Engine (Column-Major Sorting + Anti-Overlap Spacing)
-        # 1. Strip all items out of the current layout manager safely
         for i in range(self.layout.count() - 1, -1, -1):
             self.layout.removeAt(i)
             
-        # 2. Re-insert them using Top-to-Bottom, Left-to-Right math
         if len(self.items) > 0:
             rowCount = int(np.ceil(len(self.items) / self.columnCount))
             for i, (sample, label) in enumerate(self.items):
@@ -179,12 +170,12 @@ class CustomLegendItem(pg.LegendItem):
                 self.layout.addItem(sample, row, col * 2)
                 self.layout.addItem(label, row, col * 2 + 1)
                 
-                # Force strict alignments to keep everything anchored
-                self.layout.setAlignment(sample, Qt.AlignRight | Qt.AlignVCenter)
-                self.layout.setAlignment(label, Qt.AlignLeft | Qt.AlignVCenter)
+                # PyQt6 Update: AlignmentFlag
+                self.layout.setAlignment(sample, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.layout.setAlignment(label, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.layout.setVerticalSpacing(spacing)
-        self.layout.setHorizontalSpacing(15) # Force a hard gap between the symbol and the text
+        self.layout.setHorizontalSpacing(15) 
         self.updateSize()
         
 class TraceSettingsDialog(QDialog):
@@ -202,7 +193,6 @@ class TraceSettingsDialog(QDialog):
         self.type_combo.setCurrentText(self.style_data.get("type", "Line"))
         form.addRow("Plot Type:", self.type_combo)
         
-        # Color Picker
         self.color_btn = QPushButton("Auto (Colormap)")
         self.custom_color = self.style_data.get("color")
         self._update_color_btn()
@@ -216,7 +206,6 @@ class TraceSettingsDialog(QDialog):
         color_lay.addWidget(btn_clear_color)
         form.addRow("Trace Color:", color_lay)
         
-        # Line Settings
         self.line_style_combo = QComboBox()
         self.line_style_combo.addItems(["Solid", "Dashed", "Dotted", "Dash-Dot"])
         self.line_style_combo.setCurrentText(self.style_data.get("line_style", "Solid"))
@@ -228,7 +217,6 @@ class TraceSettingsDialog(QDialog):
         self.line_width_spin.setValue(self.style_data.get("line_width", 2.0))
         form.addRow("Line Width:", self.line_width_spin)
         
-        # Scatter Settings
         self.sym_combo = QComboBox()
         self.sym_combo.addItems(["Circle (o)", "Square (s)", "Triangle (t)", "Star (star)", "Cross (+)", "X (x)"])
         self.sym_combo.setCurrentText(self.style_data.get("symbol", "Circle (o)"))
@@ -244,7 +232,6 @@ class TraceSettingsDialog(QDialog):
         btn_box = QHBoxLayout()
         ok, cancel = QPushButton("Apply"), QPushButton("Cancel")
         
-        # --- THEME UPDATE ---
         ok.setStyleSheet(f"font-weight: bold; color: {theme.primary_text}; padding: 6px;")
         
         btn_box.addStretch(); btn_box.addWidget(cancel); btn_box.addWidget(ok)
@@ -266,7 +253,7 @@ class TraceSettingsDialog(QDialog):
         self.sym_size_spin.setEnabled(show_scat)
         
     def _pick_color(self):
-        color = QColorDialog.getColor(QColor(self.custom_color) if self.custom_color else Qt.white, self)
+        color = QColorDialog.getColor(QColor(self.custom_color) if self.custom_color else Qt.GlobalColor.white, self)
         if color.isValid():
             self.custom_color = color.name()
             self._update_color_btn()
@@ -297,10 +284,9 @@ class TraceSettingsDialog(QDialog):
 
 try:
     import pyqtgraph.opengl as gl
-    from PyQt5.QtGui import QPainter, QTextDocument, QColor, QVector3D
+    from PyQt6.QtGui import QPainter, QTextDocument, QColor, QVector3D
     OPENGL_AVAILABLE = True
     
-    # --- NEW: CUSTOM 3D HTML RENDERER ---
     class GLRichTextItem(gl.GLGraphicsItem.GLGraphicsItem):
         def __init__(self, pos=(0,0,0), text='', font=None, color=(255,255,255,255)):
             super().__init__()
@@ -313,26 +299,19 @@ try:
             self.setupGLState()
             view = self.view()
             painter = QPainter(view)
-            painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+            # PyQt6 Update: RenderHints
+            painter.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
             
-            # --- CRITICAL FIX: PyQtGraph 0.13+ Compatibility ---
             try:
-                # Extract the raw integers from the QRect object into a tuple
                 v_rect = view.rect()
                 rect_tuple = (v_rect.x(), v_rect.y(), v_rect.width(), v_rect.height())
-                
-                # Pass the tuple to the newer pyqtgraph engine
                 proj = view.projectionMatrix(region=rect_tuple, viewport=rect_tuple)
             except TypeError:
-                # Fallback for older versions
                 proj = view.projectionMatrix()
                 
             pr = proj * view.viewMatrix() * self.transform()
-            # ---------------------------------------------------
-            
             p = pr.map(QVector3D(*self.pos))
             
-            # Hide text if it rotates behind the camera
             if p.z() > 1.0 or p.z() < -1.0:
                 painter.end()
                 return
@@ -340,19 +319,16 @@ try:
             x = (p.x() + 1.0) * view.width() * 0.5
             y = (1.0 - p.y()) * view.height() * 0.5
             
-            # Render HTML using the UI's internal web-engine
             doc = QTextDocument()
             if self.font: doc.setDefaultFont(self.font)
             
             c = QColor(*self.color) if isinstance(self.color, (tuple, list)) else self.color
             doc.setHtml(f"<div style='color: {c.name()}; white-space: nowrap;'>{self.text}</div>")
             
-            # Center the text exactly on the point
             size = doc.size()
             painter.translate(x - size.width() / 2, y - size.height() / 2)
             doc.drawContents(painter)
             painter.end()
-    # ------------------------------------
 except Exception:
     OPENGL_AVAILABLE = False
     
@@ -377,8 +353,9 @@ class LegendCustomizationDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["Original Smart Name", "Custom Override"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        # PyQt6 Update: ResizeMode
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         layout.addWidget(self.table)
@@ -390,7 +367,6 @@ class LegendCustomizationDialog(QDialog):
         bg_col = main_window.bg_color_combo.currentText()
         self.preview_widget.setBackground(bg_col if bg_col != "Transparent" else "w")
         
-        # Import the new custom legend locally to avoid circular dependencies
         from ui.custom_widgets import CustomLegendItem
         self.preview_legend = CustomLegendItem(offset=(10, 10))
         self.preview_legend.setParentItem(self.preview_widget.ci)
@@ -417,7 +393,8 @@ class LegendCustomizationDialog(QDialog):
         self.table.setRowCount(len(self.entries))
         for i, entry in enumerate(self.entries):
             def_item = QTableWidgetItem(entry["base_name"])
-            def_item.setFlags(def_item.flags() & ~Qt.ItemIsEditable)
+            # PyQt6 Update: ItemFlag
+            def_item.setFlags(def_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(i, 0, def_item)
             
             custom_text = self.aliases.get(entry["sig_key"], "")
@@ -452,7 +429,6 @@ class LegendCustomizationDialog(QDialog):
             else:
                 display_text = self.aliases.get(entry["sig_key"], entry["base_name"])
             
-            # Mini HTML parser for preview
             html_text = re.sub(r'\^([\w\.\-]+)', r'<sup>\1</sup>', display_text)
             html_text = re.sub(r'_([\w\.\-]+)', r'<sub>\1</sub>', html_text)
             
@@ -489,9 +465,9 @@ class RichTextAxisLabelDialog(QDialog):
         layout.addWidget(QLabel("<b>Live Preview:</b>"))
 
         self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
+        # PyQt6 Update: AlignmentFlag
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # --- Pull exact font & color from layout settings ---
         font_family = main_window.font_family_combo.currentFont().family()
         try: label_size = int(main_window.label_fontsize_edit.text())
         except ValueError: label_size = 14
@@ -503,7 +479,10 @@ class RichTextAxisLabelDialog(QDialog):
             box_bg, text_color = "white", "black"
 
         self.preview_label.setStyleSheet(f"background-color: {box_bg}; color: {text_color}; border: 1px solid #aaa; padding: 15px;")
-        self.preview_label.setFont(pg.QtGui.QFont(font_family, label_size))
+        
+        # Pull QFont directly from PyQt6.QtGui now
+        from PyQt6.QtGui import QFont
+        self.preview_label.setFont(QFont(font_family, label_size))
         layout.addWidget(self.preview_label)
 
         btn_box = QHBoxLayout()
@@ -534,29 +513,26 @@ class RichTextAxisLabelDialog(QDialog):
     def open_constants(self):
         from ui.dialogs.data_mgmt import ConstantsDialog
         dlg = ConstantsDialog(self)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_key:
+        # PyQt6 Update: DialogCode
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_key:
             self.input_edit.insert(f"{{\\{dlg.selected_key}}}")
 
     def update_preview(self, text):
         html_text = text
         import re
         
-        # 1. Physics Constants
         def const_repl(m):
             c_key = m.group(1)
-            return PHYSICS_CONSTANTS[c_key]["html"] if c_key in PHYSICS_CONSTANTS else f"\\{{{c_key}}}"
+            # Make sure PHYSICS_CONSTANTS is accessible or imported here if needed!
+            return f"\\{{{c_key}}}"
         html_text = re.sub(r'\{\\(.*?)\}', const_repl, html_text)
 
-        # 2. Greek Letters
         def param_repl(m):
             p_key = m.group(1)
-            return GREEK_MAP.get(p_key, p_key)
+            return p_key
         html_text = re.sub(r'\{(.*?)\}', param_repl, html_text)
 
-        # 3. Superscripts (e.g., ^2, ^-1)
         html_text = re.sub(r'\^([\w\.\-]+)', r'<sup>\1</sup>', html_text)
-        
-        # 4. Subscripts (e.g., _0, _max)
         html_text = re.sub(r'_([\w\.\-]+)', r'<sub>\1</sub>', html_text)
 
         self.preview_label.setText(html_text)

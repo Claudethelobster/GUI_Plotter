@@ -1,11 +1,11 @@
 # ui/dialogs/analysis_hist.py
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, 
     QPushButton, QDoubleSpinBox, QSpinBox
 )
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 from core.theme import theme
 
 class SmartBinningDialog(QDialog):
@@ -158,8 +158,8 @@ class SigmaClippingDialog(QDialog):
         self.bg = pg.BarGraphItem(x=centers, height=y, width=widths, brush=pg.mkBrush((100, 150, 255, 150)))
         self.plot_widget.addItem(self.bg)
         
-        self.lower_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('r', width=2, style=Qt.DashLine))
-        self.upper_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('r', width=2, style=Qt.DashLine))
+        self.lower_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('r', width=2, style=Qt.PenStyle.DashLine))
+        self.upper_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('r', width=2, style=Qt.PenStyle.DashLine))
         self.plot_widget.addItem(self.lower_line)
         self.plot_widget.addItem(self.upper_line)
         

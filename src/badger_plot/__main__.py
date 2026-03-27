@@ -1,8 +1,18 @@
 # main.py
 import sys
 import os
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import Qt
+
+# --- THE SPYDER CACHE ASSASSIN ---
+# Spyder forcefully injects its own PyQt5 environment variables 
+# into the external terminal. We must destroy them before PyQt6 loads.
+os.environ.pop("QT_API", None)
+os.environ.pop("QT_PLUGIN_PATH", None)
+os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
+# ---------------------------------
+
+# Now it is safe to import PyQt6
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
 
 # --- Path Resolution ---
 # Adds path of package to working directory. Both old and new dir will work.
@@ -16,16 +26,7 @@ except ModuleNotFoundError:
     from ui.splash_screen import SplashLoader
 
 def main():
-    # --- THE DEFINITIVE FIX FOR DEDICATED GPUs ---
-    # Ensure OpenGL contexts share resources. Must be called before app creation.
-    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
-
-    # --- ENABLE 2D HARDWARE ACCELERATION ---
-    # Optional: pushes all 2D panning, zooming, and drawing to the Graphics Card
-    # import pyqtgraph as pg
-    # pg.setConfigOptions(useOpenGL=True, antialias=True)
-
-    # Safely get or create the QApplication instance
+    # PyQt6 handles DPI scaling and OpenGL contexts natively under the hood!
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
@@ -46,7 +47,8 @@ def main():
     splash.close()
     window.show()
     
-    sys.exit(app.exec_())
+    # PyQt6 uses .exec() instead of the legacy .exec_()
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()

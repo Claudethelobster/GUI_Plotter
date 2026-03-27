@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib
 import pyqtgraph as pg
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QMessageBox
 
 try:
     import pyqtgraph.opengl as gl
