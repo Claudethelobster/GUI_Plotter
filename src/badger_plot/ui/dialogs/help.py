@@ -1,5 +1,5 @@
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton, QTabWidget, QWidget
 
 from core.theme import theme
 
@@ -7,120 +7,172 @@ class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("EggPlot - Help & Instructions")
-        self.resize(850, 800)
+        self.resize(950, 750)
         
         # Apply the base dialog theme
         self.setStyleSheet(f"background-color: {theme.bg}; color: {theme.fg};")
 
         layout = QVBoxLayout(self)
-
-        self.browser = QTextBrowser()
-        self.browser.setOpenExternalLinks(True)
-        self.browser.setStyleSheet(f"background-color: {theme.panel_bg}; border: 1px solid {theme.border};")
         
-        # We use an f-string to inject the dynamic theme colors into the HTML CSS
-        # Notice that standard CSS curly braces are doubled ({{ and }})
-        html_content = f"""
+        # Shared CSS string to inject dynamic theme colours into all tabs
+        self.css = f"""
         <style>
             body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 14px; color: {theme.fg}; line-height: 1.5; }}
-            h1 {{ color: {theme.primary_text}; margin-bottom: 5px; }}
-            h2 {{ color: {theme.danger_text}; border-bottom: 1px solid {theme.border}; padding-bottom: 3px; margin-top: 20px; font-size: 18px;}}
-            h3 {{ color: {theme.fg}; margin-bottom: 2px; }}
+            h2 {{ color: {theme.danger_text}; border-bottom: 2px solid {theme.border}; padding-bottom: 4px; margin-top: 15px; font-size: 20px; }}
+            h3 {{ color: {theme.primary_text}; margin-top: 15px; margin-bottom: 4px; font-size: 16px; }}
             ul {{ margin-top: 5px; }}
-            li {{ margin-bottom: 6px; }}
-            code {{ background-color: {theme.bg}; padding: 2px 4px; border-radius: 3px; font-family: Consolas, monospace; color: {theme.primary_text}; font-weight: bold; border: 1px solid {theme.border}; }}
-            .about {{ background-color: {theme.warning_bg}; border-left: 4px solid {theme.warning_border}; padding: 10px; margin-bottom: 20px; font-style: italic; color: {theme.fg}; }}
-            .safety {{ background-color: {theme.primary_bg}; border-left: 4px solid {theme.primary_border}; padding: 10px; margin-top: 20px; color: {theme.fg}; }}
+            li {{ margin-bottom: 8px; }}
+            code {{ background-color: {theme.bg}; padding: 2px 5px; border-radius: 4px; font-family: Consolas, monospace; color: {theme.primary_text}; font-weight: bold; border: 1px solid {theme.border}; }}
+            .about {{ background-color: {theme.warning_bg}; border-left: 4px solid {theme.warning_border}; padding: 12px; margin-bottom: 20px; font-style: italic; color: {theme.fg}; }}
+            .safety {{ background-color: {theme.primary_bg}; border-left: 4px solid {theme.primary_border}; padding: 12px; margin-top: 15px; margin-bottom: 15px; color: {theme.fg}; }}
         </style>
-        
-        <h1>Welcome to EggPlot</h1>
-        
-        <div class="about">
-            <b>About EggPlot:</b> EggPlot earned its namesake during development when the smart validation engine accidentally loaded a developer's grocery list containing "Eggs" instead of actual experimental data, attempting to plot the eggs against a time axis. Today, it stands as a highly advanced, multi-format analysis tool for physicists!
-        </div>
-
-        <div class="safety">
-            <b>Data Protection (MIRROR Files)</b><br>
-            To prevent accidental data loss, this software uses a <b>Mirror File System</b>. When modifying a file (e.g., renaming columns, slicing data, applying an iFFT filter, or generating custom math), the program creates a safe copy prefixed with <code>MIRROR_</code> and applies the changes there. Your original raw data is never altered.<br><br>
-            <i>Note: If you are working on a Concatenated CSV, the software assumes it is already a derived working file, so it skips the mirror creation and applies the changes directly.</i>
-        </div>
-
-        <h2>1. Opening & Inspecting Data</h2>
-        <ul>
-            <li><b>Open File:</b> Loads a standard CSV (with auto-delimiter detection), an HDF5 binary (.h5), or a native BadgerLoop (.blp) file.</li>
-            <li><b>Open Folder (Batch CSVs):</b> Loads a directory of CSV files. The Smart Validation Engine will group matching files together and load them sequentially as "Sweeps" of the same experiment.</li>
-            <li><b>Concatenate Folder:</b> Stitches a loaded folder of CSVs into a single <code>ConcatenatedCSV</code> file. The software injects inline metadata so it remembers exactly where each sweep begins and ends when reloaded.</li>
-            <li><b>Metadata:</b> Click <i>Show Metadata</i> to view file details, folder sizes, and acquisition settings.</li>
-            <li><b>Sweep Table:</b> Use the <i>Inspect &rarr; Sweep table</i> menu to view the raw numerical data in a spreadsheet format.</li>
-            <li><b>Crosshairs (Ctrl+H):</b> Go to <i>Inspect &rarr; Toggle crosshairs</i> to bring up coordinate tracking. Use the toggle button on the left panel to switch between free-roaming mode and snapping directly to the nearest data point.</li>
-        </ul>
-
-        <h2>2. Plotting & The Series Manager</h2>
-        <p>Use the <b>Active Plot Series</b> box to plot multiple datasets simultaneously. Select your X, Y, and optional Z columns from the dropdowns, then click <b>Add Pair</b>.</p>
-        <ul>
-            <li><b>Editing Series:</b> Click a series in the list to highlight it; changing the dropdowns will update that specific series.</li>
-            <li><b>Visibility (👁 Icon):</b> Click the eye icon next to a series to temporarily hide it from the plot without deleting it.</li>
-            <li><b>Per-Trace Customization (⚙️ Icon):</b> Click the gear icon to customize the exact line style (solid, dashed, dotted), thickness, color, and scatter symbol for that specific trace. This overrides the global defaults.</li>
-            <li><b>Dual Axis (L/R Button):</b> Click the L/R button to assign a series to the Left or Right Y-Axis. This allows for dual X-Y plotting, perfect for comparing datasets with vastly different scales.</li>
-            <li><b>Plot Modes:</b> 
-                <ul>
-                    <li><i>2D Plot:</i> Overlays all active series in the list using standard Lines or Scatters.</li>
-                    <li><i>3D Plot:</i> Requires X, Y, and Z columns. Displays the currently highlighted series. Supports 3D Line, 3D Scatter, and <b>Surface</b> plotting (which renders a color-mapped topological 3D grid).</li>
-                    <li><i>Heat Map:</i> Requires X, Y, and Z columns. Generates a 2D flat color-mapped grid where color intensity represents the Z value.</li>
-                    <li><i>Histogram:</i> Bins your Y-column data to show its statistical distribution. Click <b>Toggle Histogram Stats</b> to view a HUD containing the Count, Mean, Median, Mode, Std Dev, Skewness, and Kurtosis.</li>
-                </ul>
-            </li>
-            <li><b>Layout & Slicing (Ctrl+L):</b> Filter sweeps or points using standard syntax (e.g., <code>0:10</code> or <code>0,2,4</code>). This menu also controls global trace defaults, grid lines, background colors, and <b>Legend Cosmetics</b> (which update live as you drag the opacity/column sliders).</li>
-        </ul>
-
-        <h2>3. Interaction & Point Selection</h2>
-        <p>Using the Interaction Mode buttons on the left panel, you can switch from standard Pan/Zoom to <b>Box</b> or <b>Lasso</b> selection.</p>
-        <ul>
-            <li><b>Region Statistics:</b> Selecting a group of points on the graph will highlight them in yellow and spawn a floating statistics box detailing the selection's Count, Mean, Std Dev, Min/Max, and Integral.</li>
-            <li><b>Math Masking:</b> Selections act as a powerful mask. If you have points selected, tools like <i>Signal Processing</i>, <i>Curve Fitting</i>, and the <i>iFFT Surgeon</i> will <b>only</b> apply to those specific highlighted points. Press <code>Escape</code> to clear your selection.</li>
-        </ul>
-
-        <h2>4. Data Analysis & Math</h2>
-        <ul>
-            <li><b>Custom Columns:</b> Navigate to <i>Inspect &rarr; Create Custom Column</i> to mathematically derive new data using standard NumPy equations (e.g., <code>[Voltage] * sin([Angle])</code>). Use the <b>Generate Time Axis</b> button for BadgerLoop data, or insert <b>Physics Constants</b>.</li>
-            <li><b>Data Slicer (Non-Monotonic Split):</b> Easily isolate specific slopes of a non-monotonic calibration curve. Place your crosshair at the inflection point, click "Grab from Crosshair", and the tool will split the data into two isolated columns (Above/Below the threshold) padded with NaNs to ensure clean curve fitting.</li>
-            <li><b>Area Calculators:</b> Found under the Analysis menu.
-                <ul>
-                    <li><i>Area Under Curve:</i> Calculate definite integrals using Box/Lasso selections or custom bendable lines. Supports multiple baseline methods (y=0, Min-Y, or Local Slant).</li>
-                    <li><i>Enclosed Loop Area:</i> Calculates the area inside parametric loops (like Hysteresis or P-V diagrams) using the exact Shoelace formula. Supports auto-detection of multiple intersecting lobes.</li>
-                </ul>
-            </li>
-            <li><b>Signal Processing:</b> Applies mathematical filters (Savitzky-Golay smoothing, moving averages, standard derivatives, cumulative integrals).</li>
-            <li><b>Phase Space Generator:</b> Automatically calculates the velocity (dx/dt) of a selected state variable and configures the plot for phase space visualization.</li>
-            <li><b>Fourier Analysis:</b>
-                <ul>
-                    <li><i>Spectrogram (STFT):</i> Generates a Time-Frequency heatmap of your signal to visualize how frequency components shift over time.</li>
-                    <li><i>Peak Finder & iFFT Surgeon:</i> Automatically locates signal peaks. Click <b>Toggle FFT Mode</b> to view the frequency spectrum. You can highlight specific noise frequencies in the table (or by drawing a box on the graph) and permanently cut them out of your waveform using an Inverse Fast Fourier Transform.</li>
-                </ul>
-            </li>
-            <li><b>Averaging & Uncertainties:</b> Use the toggle buttons on the left panel to calculate the mean of all selected sweeps, or to assign specific columns as X/Y/Z error bounds.</li>
-        </ul>
-
-        <h2>5. Curve Fitting & Exporting</h2>
-        <ul>
-            <li><b>Fitting:</b> Access fitting tools via the <b>Fitting</b> menu. You can fit common functions (Polynomial, Gaussian, Exponential, Lorentzian, Logarithmic) or define your own custom equation with starting guesses.</li>
-            <li><b>Editing Fits:</b> If a fit needs adjustment, click <b>Edit Fit</b> on the left panel to reopen the dialog with your equation and parameters intact.</li>
-            <li><b>Export Fit to Column:</b> Instantly turns your mathematical fit into hard data! Generates a perfectly spaced, high-resolution X-array spanning your data's min/max bounds, evaluates the Y-values, and appends both as new columns to your dataset.</li>
-            <li><b>Save Plot:</b> Exports the current visualization as a PNG, JPG, or SVG file.</li>
-            <li><b>Export Plotted Data:</b> Exports the calculated arrays for the current plot (including averages, subsets, and transformations). You can overwrite an existing CSV or append the plotted data as new columns.</li>
-        </ul>
-        <br>
-        <p><i>Note: Window size, layout configurations, font sizes, and crosshair preferences are saved automatically when closing the program.</i></p>
         """
-        
-        self.browser.setHtml(html_content)
-        layout.addWidget(self.browser)
+
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+
+        # Build the tabs
+        self._build_welcome_tab()
+        self._build_2d_tab()
+        self._build_3d_tab()
+        self._build_heatmap_tab()
+        self._build_histogram_tab()
 
         close_btn = QPushButton("Close Guide")
-        close_btn.setFixedWidth(100)
+        close_btn.setFixedWidth(120)
         close_btn.setStyleSheet(f"""
-            QPushButton {{ background-color: {theme.panel_bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px; color: {theme.fg}; font-weight: bold; }}
+            QPushButton {{ background-color: {theme.panel_bg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 8px; color: {theme.fg}; font-weight: bold; }}
             QPushButton:hover {{ background-color: {theme.bg}; }}
         """)
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+    def _create_browser(self, html_body):
+        """Helper function to generate a styled QTextBrowser for each tab."""
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setStyleSheet(f"background-color: {theme.panel_bg}; border: 1px solid {theme.border}; padding: 10px;")
+        browser.setHtml(self.css + html_body)
+        return browser
+
+    def _build_welcome_tab(self):
+        html = """
+        <h2>Welcome to EggPlot</h2>
+        
+        <div class="about">
+            <b>About EggPlot:</b> EggPlot earned its namesake during development when the validation engine accidentally loaded a grocery list containing "Eggs" instead of actual experimental data, attempting to plot the eggs against a time axis. Today, it stands as a multi-format analysis tool for physicists.
+        </div>
+
+        <div class="safety">
+            <b>Data Protection (MIRROR Files)</b><br>
+            To prevent accidental data loss, this software uses a strict <b>Mirror File System</b>. When modifying a file (e.g., renaming columns, generating custom math), the programme creates a safe copy prefixed with <code>MIRROR_</code> and applies the changes there. Your original raw data is never altered.<br><br>
+            <i>Note: If you are working on a Concatenated CSV, the software assumes it is already a derived working file, so it applies changes directly.</i>
+        </div>
+
+        <h3>Global Preferences & Settings</h3>
+        <ul>
+            <li><b>Preferences Menu:</b> Access this via the main toolbar to configure the programme's core behaviour. Here you can set the global UI theme (Light/Dark/System), adjust the hardware polling rate for crosshairs (useful for optimising performance on older machines), and configure default startup directories and cache limits.</li>
+        </ul>
+
+        <h3>Opening & Inspecting Data</h3>
+        <ul>
+            <li><b>Open File:</b> Loads standard CSVs, HDF5 binaries (<code>.h5</code>), or native BadgerLoop (<code>.blp</code>) files.</li>
+            <li><b>Open Folder (Batch CSVs):</b> Loads a directory of CSV files as "Sweeps" of the same experiment.</li>
+            <li><b>Concatenate Folder:</b> Stitches a folder of CSVs into a single <code>ConcatenatedCSV</code> file, injecting inline metadata so sweep boundaries are remembered.</li>
+            <li><b>Metadata & Sweep Table:</b> Click <i>Show Metadata</i> to view file details. Use <i>Inspect &rarr; Sweep table</i> to view raw numerical data.</li>
+            <li><b>Custom Columns:</b> Navigate to <i>Inspect &rarr; Create custom column</i> to mathematically derive new data using standard NumPy equations.</li>
+        </ul>
+
+        <h3>Saving & Exporting</h3>
+        <ul>
+            <li><b>Save Plot:</b> Exports the current visualisation as a PNG, JPG, or scalable SVG file.</li>
+            <li><b>Export Plotted Data:</b> Exports the specific arrays currently visible on the plot. You can overwrite an existing CSV or append the plotted data as new columns.</li>
+        </ul>
+        """
+        self.tabs.addTab(self._create_browser(html), "Data & Basics")
+
+    def _build_2d_tab(self):
+        html = """
+        <h2>2D Plotting Mode</h2>
+        <p>The standard mode for analysing X-Y datasets. Overlays all active series in the list using standard Lines or Scatters.</p>
+        
+        <h3>Trace & Layout Customisation</h3>
+        <ul>
+            <li><b>Adding Data:</b> Select X and Y columns and click <b>Add Pair</b>. Click the L/R button on a trace to assign it to the Left or Right Y-Axis.</li>
+            <li><b>Per-Trace Customisation:</b> Click the ⚙️ icon to set line style, thickness, colour, and scatter symbols for specific traces.</li>
+            <li><b>Layout Manager (Ctrl+L):</b> A comprehensive control panel for the visual aesthetics of your plot. You can slice data streams (e.g., <code>0:10</code>), toggle grid line visibility and opacity, switch background/foreground colours, change axis line thickness, and dynamically tweak <b>Legend Cosmetics</b> (opacity, column count, and positioning) which update live as you drag the sliders.</li>
+            <li><b>Font Controls:</b> The layout menu also allows you to globally adjust font families and sizes for titles, axis labels, and tick marks.</li>
+        </ul>
+
+        <h3>Interaction & Analysis</h3>
+        <ul>
+            <li><b>Crosshairs & Selection:</b> Toggle crosshairs (Ctrl+H) or use Box/Lasso selection. Highlighting points spawns a statistics box and acts as a <b>Math Mask</b> for downstream tools.</li>
+            <li><b>Area Calculators:</b> Calculate Area Under Curve (definite integrals) or Enclosed Loop Area (e.g., Hysteresis) using the Shoelace formula.</li>
+            <li><b>Signal Processing & Fourier:</b> Apply smoothing, moving averages, derivatives, STFT Spectrograms, or use the iFFT Surgeon to cut out noise frequencies.</li>
+        </ul>
+
+        <h3>2D Curve Fitting</h3>
+        <ul>
+            <li><b>Standard & Custom Functions:</b> Access the <b>Fitting</b> menu to apply Polynomial, Gaussian, Exponential, Lorentzian, or Logarithmic fits, or define your own mathematical function.</li>
+            <li><b>Targeted Swarm Search:</b> If the local optimiser gets stuck, EggPlot will suggest running a global differential evolution swarm to hunt down the best starting parameters.</li>
+            <li><b>Export Fit to Column:</b> Instantly turns your mathematical fit into hard data by generating an X-array spanning your data's bounds and evaluating the Y-values into new columns.</li>
+        </ul>
+        """
+        self.tabs.addTab(self._create_browser(html), "2D Plot")
+
+    def _build_3d_tab(self):
+        html = """
+        <h2>3D Plotting Mode</h2>
+        <p>Visualise spatial or multi-variable datasets. <b>Requires X, Y, and Z columns to be assigned.</b> Displays the currently highlighted series.</p>
+        
+        <h3>3D Visualisation Options</h3>
+        <ul>
+            <li><b>3D Scatter:</b> Renders individual data points in 3D space. Useful for point clouds or disjointed spatial data.</li>
+            <li><b>3D Line:</b> Connects your X, Y, Z coordinates sequentially. Ideal for tracking trajectories or orbits over time.</li>
+            <li><b>Surface Mesh:</b> Renders a colour-mapped topological 3D surface. The engine interpolates your discrete data points into a solid, interactive terrain.</li>
+        </ul>
+
+        <h3>Controls & Interaction</h3>
+        <ul>
+            <li><b>Camera Navigation:</b> Click and drag to rotate the 3D grid. Right-click and drag to zoom. Middle-click and drag to pan the camera center.</li>
+            <li><b>Scaling:</b> Use the layout settings to adjust the aspect ratio of the X, Y, and Z bounding boxes to prevent flattened or stretched axes.</li>
+            <li><b>3D Crosshair:</b> An interactive 3D reticle that snaps to your data points in three-dimensional space, providing exact X, Y, and Z coordinate readouts on the topology.</li>
+        </ul>
+
+        <h3>3D Surface Fitting</h3>
+        <ul>
+            <li><b>Applying a Fit:</b> Navigate to the Fitting menu while in 3D mode to map a mathematical surface (e.g., 2D Gaussian, Polynomial plane) directly onto your spatial data.</li>
+            <li><b>Visualising the Fit:</b> Renders the fitted equation as a semi-transparent surface overlaying your raw 3D scatter or line data.</li>
+        </ul>
+        """
+        self.tabs.addTab(self._create_browser(html), "3D Plot")
+
+    def _build_heatmap_tab(self):
+        html = """
+        <h2>Heat Map Mode</h2>
+        <p>A flat, 2D representation of 3D data. <b>Requires X, Y, and Z columns.</b></p>
+        
+        <h3>Features</h3>
+        <ul>
+            <li><b>Colour Mapping:</b> Generates a 2D grid where the X and Y axes represent coordinates, and the colour intensity of each pixel represents the Z value.</li>
+            <li><b>Data Interpolation:</b> EggPlot automatically bins and interpolates scattered X, Y, Z data into a uniform grid required for heat map rendering.</li>
+            <li><b>Colour Scales:</b> You can adjust the colour gradient map in the layout settings to better highlight specific thresholds or intensity peaks.</li>
+        </ul>
+        """
+        self.tabs.addTab(self._create_browser(html), "Heat Map")
+
+    def _build_histogram_tab(self):
+        html = """
+        <h2>Histogram Mode</h2>
+        <p>Analyse the statistical distribution of a single variable. <b>Requires only a Y column to be assigned.</b></p>
+        
+        <h3>Features & Statistical Tools</h3>
+        <ul>
+            <li><b>Smart Binning Optimiser:</b> Automatically calculates the mathematically ideal number of bins for your specific dataset using established statistical rules, ensuring your distribution is never artificially over- or under-represented.</li>
+            <li><b>Manual Bin Control:</b> Use the slider or input box on the left panel to manually override the optimiser and adjust the resolution of the distribution.</li>
+            <li><b>Probability Density Function (PDF):</b> Overlays a smooth, continuous Gaussian KDE (Kernel Density Estimate) or fitted PDF curve directly on top of your discrete bins to better visualise the underlying continuous probability distribution.</li>
+            <li><b>Sigma Clipper:</b> A powerful outlier rejection tool. Set a standard deviation threshold (e.g., 3-sigma), and the clipper will instantly filter out extreme anomalous values, recalculating the histogram and statistics without the noise.</li>
+            <li><b>Statistics HUD:</b> Click <b>Toggle Histogram Stats</b> to view an on-screen overlay containing the dataset's Count, Mean, Median, Mode, Standard Deviation, Skewness, and Kurtosis.</li>
+        </ul>
+        """
+        self.tabs.addTab(self._create_browser(html), "Histogram")
