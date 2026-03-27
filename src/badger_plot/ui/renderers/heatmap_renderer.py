@@ -2,7 +2,7 @@
 import numpy as np
 import pyqtgraph as pg
 import matplotlib
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QMessageBox
 
 class HeatmapRenderer:
     @staticmethod

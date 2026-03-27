@@ -3,8 +3,8 @@ import numpy as np
 import pyqtgraph as pg
 import matplotlib
 import re
-from PyQt5.QtWidgets import QMessageBox
-from PyQt5.QtCore import QTimer
+from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import QTimer
 from core.theme import theme
 
 class RendererHistogram:

@@ -5,9 +5,9 @@ import scipy.signal as sig
 import scipy.integrate as intg
 import re
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QComboBox,
     QCheckBox, QLabel, QPushButton, QSpinBox, QTableWidget, QHeaderView,
     QAbstractItemView, QGroupBox, QButtonGroup, QMessageBox, QApplication,
@@ -155,7 +155,7 @@ class LoopAreaDialog(QDialog):
         layout.addWidget(QLabel("<b>Detected Loops:</b> (Check boxes to include in final sum)"))
         
         self.list_widget = QListWidget()
-        self.list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list_widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list_widget.itemChanged.connect(self._on_item_checked)
         self.list_widget.itemSelectionChanged.connect(self._preview_selected)
         layout.addWidget(self.list_widget)
@@ -207,9 +207,9 @@ class LoopAreaDialog(QDialog):
         direction = "CCW (+)" if area >= 0 else "CW (-)"
         
         item = QListWidgetItem(f"{name} | Area: {abs(area):.4g} [{direction}]")
-        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(Qt.Checked)
-        item.setData(Qt.UserRole, len(self.detected_loops) - 1)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(Qt.CheckState.Checked)
+        item.setData(Qt.ItemDataRole.UserRole, len(self.detected_loops) - 1)
         self.list_widget.addItem(item)
         self._preview_selected()
 
@@ -300,9 +300,9 @@ class LoopAreaDialog(QDialog):
                         "Because the Shoelace formula treats Counter-Clockwise area as Positive and Clockwise area as Negative, treating this entire plot as one continuous loop will compute the Net Area (opposing lobes will cancel each other out).\n\n"
                         "If you want the Absolute Total Area, use the 'Auto-Detect Loops' tool instead to split it into separate polygons.\n\n"
                         "Do you still want to treat this as 1 continuous loop?",
-                        QMessageBox.Yes | QMessageBox.No
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                     )
-                    if ans == QMessageBox.No:
+                    if ans == QMessageBox.StandardButton.No:
                         return
                         
         except ImportError:
@@ -325,10 +325,10 @@ class LoopAreaDialog(QDialog):
         
         for i in range(self.list_widget.count()):
             item = self.list_widget.item(i)
-            loop_idx = item.data(Qt.UserRole)
+            loop_idx = item.data(Qt.ItemDataRole.UserRole)
             loop = self.detected_loops[loop_idx]
             
-            if item.checkState() == Qt.Checked:
+            if item.checkState() == Qt.CheckState.Checked:
                 checked_loops.append(loop)
             if item.isSelected():
                 highlighted_loops.append(loop)
@@ -341,8 +341,8 @@ class LoopAreaDialog(QDialog):
         checked_loops = []
         for i in range(self.list_widget.count()):
             item = self.list_widget.item(i)
-            if item.checkState() == Qt.Checked:
-                checked_loops.append(self.detected_loops[item.data(Qt.UserRole)])
+            if item.checkState() == Qt.CheckState.Checked:
+                checked_loops.append(self.detected_loops[item.data(Qt.ItemDataRole.UserRole)])
         return checked_loops
 
     def closeEvent(self, event):
@@ -656,11 +656,11 @@ class PeakFinderTool(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["Peak #", "X (Center)", "Y (Height)", "Width", "Smart Diagnosis"])
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.setAlternatingRowColors(True)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         layout.addWidget(self.table)
         
         self.peak_data_memory = []
@@ -841,7 +841,7 @@ class PeakFinderTool(QDialog):
         left_x_vis, right_x_vis, width_heights = [], [], []
 
         import warnings
-        from PyQt5.QtWidgets import QTableWidgetItem
+        from PyQt6.QtWidgets import QTableWidgetItem
         
         self.table.setRowCount(len(peaks))
         self.peak_data_memory.clear()
@@ -1017,7 +1017,7 @@ class PeakFinderTool(QDialog):
             opts = getattr(self.parent_gui, 'last_load_opts', {"type": self.parent_gui.file_type, "delimiter": ",", "has_header": True})
             
             self.parent_gui.progress_dialog = QProgressDialog("Applying iFFT Filter & Rebuilding...", "Cancel", 0, 100, self.parent_gui)
-            self.parent_gui.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.parent_gui.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.parent_gui.progress_dialog.setCancelButton(None)
             self.parent_gui.progress_dialog.setMinimumDuration(0)
             self.parent_gui.progress_dialog.show()
@@ -1097,7 +1097,7 @@ class BaselineSubtractionDialog(QDialog):
         
         # Setup phantom curves for live preview
         if not hasattr(self.main_window, 'phantom_curve'):
-            self.main_window.phantom_curve = pg.PlotCurveItem(pen=pg.mkPen("r", width=2, style=Qt.DashLine))
+            self.main_window.phantom_curve = pg.PlotCurveItem(pen=pg.mkPen("r", width=2, style=Qt.PenStyle.DashLine))
             self.main_window.plot_widget.addItem(self.main_window.phantom_curve)
             
         if not hasattr(self.main_window, 'phantom_baseline_flattened'):
@@ -1214,7 +1214,7 @@ class BaselineSubtractionDialog(QDialog):
         layout.addWidget(self.equation_input)
 
         self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setStyleSheet("background-color: white; border: 1px solid #ccc; font-size: 18px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
         self.preview_label.setMinimumHeight(60)
         layout.addWidget(self.preview_label)
@@ -1381,7 +1381,7 @@ class BaselineSubtractionDialog(QDialog):
     def _capture_spline_anchors(self):
         sel_indices = getattr(self.main_window, 'selected_indices', set())
         if not sel_indices:
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "No Selection", "Draw a box/lasso to select baseline points first.")
             return
             

@@ -2,8 +2,8 @@
 import numpy as np
 import pyqtgraph as pg
 import matplotlib
-from PyQt5.QtWidgets import QMessageBox
-from PyQt5.QtCore import Qt
+from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import Qt
 
 class Renderer2D:
     @staticmethod
@@ -236,11 +236,11 @@ class Renderer2D:
                 sym_raw = style.get("symbol", mw.symbol_combo.currentText())
                 sym = sym_map.get(sym_raw, "o")
                 
-                pen_styles = {"Solid": Qt.SolidLine, "Dashed": Qt.DashLine, "Dotted": Qt.DotLine, "Dash-Dot": Qt.DashDotLine}
-                pen_style = pen_styles.get(style.get("line_style", "Solid"), Qt.SolidLine)
+                pen_styles = {"Solid": Qt.PenStyle.SolidLine, "Dashed": Qt.PenStyle.DashLine, "Dotted": Qt.PenStyle.DotLine, "Dash-Dot": Qt.PenStyle.DashDotLine}
+                pen_style = pen_styles.get(style.get("line_style", "Solid"), Qt.PenStyle.SolidLine)
                 
                 if style.get("color"):
-                    from PyQt5.QtGui import QColor
+                    from PyQt6.QtGui import QColor
                     c = QColor(style["color"])
                     line_color = (c.red(), c.green(), c.blue(), 255)
                     

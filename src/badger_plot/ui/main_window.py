@@ -6,12 +6,12 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 import pyqtgraph.exporters as pgexp
-from PyQt5.QtCore import Qt, QSettings, QTimer, QEvent, QThread, pyqtSignal
-from PyQt5.QtGui import QPalette, QColor
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QSettings, QTimer, QEvent, QThread, pyqtSignal
+from PyQt6.QtGui import QPalette, QColor, QAction
+from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QLineEdit, QComboBox, QStackedLayout, 
-    QMessageBox, QProgressDialog, QListWidget, QAction, QGridLayout, 
+    QMessageBox, QProgressDialog, QListWidget, QGridLayout, 
     QButtonGroup, QApplication, QDialog, QFormLayout, QTextEdit,
     QCheckBox, QTabWidget, QFontComboBox, QSlider, QTableWidget, QTableWidgetItem,
     QHeaderView, QSpinBox
@@ -108,7 +108,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
         self.plot_wrapper = QWidget()
         wrapper_layout = QVBoxLayout(self.plot_wrapper)
-        wrapper_layout.setAlignment(Qt.AlignCenter)
+        wrapper_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         wrapper_layout.setContentsMargins(0, 0, 0, 0)
         wrapper_layout.addWidget(self.plot_widget)
         
@@ -166,15 +166,15 @@ class BadgerLoopQtGraph(QMainWindow):
     def show_missing_library_warning(self):
         msg = QMessageBox(self)
         msg.setWindowTitle("Missing BadgerLoop Library")
-        msg.setIcon(QMessageBox.Warning)
+        msg.setIcon(QMessageBox.Icon.Warning)
         msg.setText("The 'badger_loop_py3_2.py' library was not found in the same directory as this script.")
         msg.setInformativeText(
             "The program will run in CSV-only mode. All BadgerLoop-specific file formats and metadata features have been disabled.\n\n"
             "To enable full functionality, please place 'badger_loop_py3_2.py' in the same folder and restart the program."
         )
         
-        btn_continue = msg.addButton("Run in CSV Mode", QMessageBox.AcceptRole)
-        btn_close = msg.addButton("Close Program", QMessageBox.RejectRole)
+        btn_continue = msg.addButton("Run in CSV Mode", QMessageBox.ButtonRole.AcceptRole)
+        btn_close = msg.addButton("Close Program", QMessageBox.ButtonRole.RejectRole)
         msg.exec()
         
         if msg.clickedButton() == btn_close:
@@ -275,7 +275,7 @@ class BadgerLoopQtGraph(QMainWindow):
         is_visible = pair.get('visible', True)
         axis_side = pair.get('axis', 'L')
         
-        from PyQt5.QtWidgets import QListWidgetItem
+        from PyQt6.QtWidgets import QListWidgetItem
         item = QListWidgetItem(self.series_list)
         self.series_list.addItem(item)
         
@@ -288,19 +288,19 @@ class BadgerLoopQtGraph(QMainWindow):
         if self.plot_mode == "2D":
             btn_eye = QPushButton("👁")
             btn_eye.setFixedSize(26, 26)
-            btn_eye.setCursor(Qt.PointingHandCursor)
+            btn_eye.setCursor(Qt.CursorShape.PointingHandCursor)
             
             # --- NEW: Settings Button ---
             btn_settings = QPushButton("⚙️")
             btn_settings.setFixedSize(26, 26)
-            btn_settings.setCursor(Qt.PointingHandCursor)
+            btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_settings.setToolTip("Customize Trace Style")
             btn_settings.setStyleSheet("border: none; font-size: 16px; color: #555;")
             # ----------------------------
             
             btn_axis = QPushButton(axis_side)
             btn_axis.setFixedSize(26, 26)
-            btn_axis.setCursor(Qt.PointingHandCursor)
+            btn_axis.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_axis.setToolTip("Toggle Left / Right Y-Axis")
             
             if is_visible:
@@ -398,7 +398,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
         pair_name = f"{pair.get('y_name', 'Y')} vs {pair.get('x_name', 'X')}"
         dlg = TraceSettingsDialog(pair["style"], pair_name, self)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             pair["style"] = dlg.get_result()
             self.plot() # Instantly redraw
         
@@ -425,13 +425,13 @@ class BadgerLoopQtGraph(QMainWindow):
             
         if source == self.plot_widget.getViewBox() or source == getattr(self, 'vb_right', None):
             if getattr(self, 'interaction_mode', 'pan') != "pan" and getattr(self, 'plot_mode', '2D') == "2D":
-                if event.type() == QEvent.GraphicsSceneMousePress and event.button() == Qt.LeftButton:
+                if event.type() == QEvent.Type.GraphicsSceneMousePress and event.button() == Qt.MouseButton.LeftButton:
                     self._start_selection(event)
                     return True 
-                elif event.type() == QEvent.GraphicsSceneMouseMove and getattr(self, '_is_selecting', False):
+                elif event.type() == QEvent.Type.GraphicsSceneMouseMove and getattr(self, '_is_selecting', False):
                     self._drag_selection(event)
                     return True
-                elif event.type() == QEvent.GraphicsSceneMouseRelease and event.button() == Qt.LeftButton and getattr(self, '_is_selecting', False):
+                elif event.type() == QEvent.Type.GraphicsSceneMouseRelease and event.button() == Qt.MouseButton.LeftButton and getattr(self, '_is_selecting', False):
                     self._end_selection(event)
                     return True
         return super().eventFilter(source, event)
@@ -501,7 +501,7 @@ class BadgerLoopQtGraph(QMainWindow):
             mask = path.contains_points(pts)
             new_indices = np.where(mask)[0]
             
-        ctrl_pressed = (event.modifiers() == Qt.ControlModifier)
+        ctrl_pressed = (event.modifiers() == Qt.KeyboardModifier.ControlModifier)
         if ctrl_pressed: self.selected_indices.update(new_indices) 
         else: self.selected_indices = set(new_indices) 
             
@@ -531,7 +531,7 @@ class BadgerLoopQtGraph(QMainWindow):
         # ------------------------------------------------
         
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             self.clear_selection()
         super().keyPressEvent(event)
         
@@ -545,12 +545,12 @@ class BadgerLoopQtGraph(QMainWindow):
         if not self.dataset: return
         res = self._get_all_plotted_xy(apply_selection=False)
         if len(res) < 4 or len(res[0]) == 0:
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "No Data", "Please plot a 2D curve first.")
             return
 
         dlg = LoopAreaDialog(self)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             loops = dlg.get_selected_loops()
             self._apply_final_loops(loops)
         else:
@@ -566,9 +566,9 @@ class BadgerLoopQtGraph(QMainWindow):
     def _draw_temp_loops(self, checked_loops, highlighted_loops):
         self._clear_temp_loops()
         
-        from PyQt5.QtWidgets import QGraphicsPolygonItem
-        from PyQt5.QtGui import QPolygonF
-        from PyQt5.QtCore import QPointF
+        from PyQt6.QtWidgets import QGraphicsPolygonItem
+        from PyQt6.QtGui import QPolygonF
+        from PyQt6.QtCore import QPointF
         import pyqtgraph as pg
         
         # Draw standard checked loops (Faint Gray)
@@ -589,7 +589,7 @@ class BadgerLoopQtGraph(QMainWindow):
             # Build native Qt Polygon with explicit floats
             polygon = QPolygonF([QPointF(float(x), float(y)) for x, y in zip(loop['x'], loop['y'])])
             item = QGraphicsPolygonItem(polygon)
-            item.setFillRule(Qt.WindingFill) # <--- NEW: Forces Qt to shade intersecting/CW lobes
+            item.setFillRule(Qt.FillRule.WindingFill) # <--- NEW: Forces Qt to shade intersecting/CW lobes
             
             item.setPen(pg.mkPen((150, 150, 150, 200), width=2))
             item.setBrush(pg.mkBrush((150, 150, 150, 80)))
@@ -604,9 +604,9 @@ class BadgerLoopQtGraph(QMainWindow):
         
         if not loops: return
             
-        from PyQt5.QtWidgets import QGraphicsPolygonItem
-        from PyQt5.QtGui import QPolygonF
-        from PyQt5.QtCore import QPointF
+        from PyQt6.QtWidgets import QGraphicsPolygonItem
+        from PyQt6.QtGui import QPolygonF
+        from PyQt6.QtCore import QPointF
         import pyqtgraph as pg
             
         total_abs_area = 0.0
@@ -622,7 +622,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
             polygon = QPolygonF([QPointF(float(x), float(y)) for x, y in zip(loop['x'], loop['y'])])
             item = QGraphicsPolygonItem(polygon)
-            item.setFillRule(Qt.WindingFill) # <--- NEW
+            item.setFillRule(Qt.FillRule.WindingFill) # <--- NEW
             
             item.setPen(pg.mkPen(border, width=2))
             item.setBrush(pg.mkBrush(color))
@@ -687,13 +687,13 @@ class BadgerLoopQtGraph(QMainWindow):
         dlg = SignalProcessingDialog(x_full, y_full, sel_idx, pair.get('y_name', 'Data'), self)
         
         if not hasattr(self, 'phantom_curve'):
-            self.phantom_curve = pg.PlotCurveItem(pen=pg.mkPen("m", width=3, style=Qt.DashLine))
+            self.phantom_curve = pg.PlotCurveItem(pen=pg.mkPen("m", width=3, style=Qt.PenStyle.DashLine))
             self.plot_widget.addItem(self.phantom_curve)
         
         dlg.preview_updated.connect(lambda x_prev, y_prev: self._update_signal_preview(x_prev, y_prev))
         dlg.calculate_preview() 
         
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             self.phantom_curve.setVisible(False)
             config = dlg.get_result()
             
@@ -742,7 +742,7 @@ class BadgerLoopQtGraph(QMainWindow):
                     l.addLayout(btn_box)
                     
                     ok.clicked.connect(dlg_mirror.accept); cancel.clicked.connect(dlg_mirror.reject)
-                    if dlg_mirror.exec() != QDialog.Accepted: return
+                    if dlg_mirror.exec() != QDialog.DialogCode.Accepted: return
                     
                     choice = combo.currentText()
                     if choice == "--- Create New Mirror ---":
@@ -762,7 +762,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 if self.file_type == "CSV": opts["delimiter"] = ","
                     
                 self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
-                self.progress_dialog.setWindowModality(Qt.WindowModal)
+                self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
                 self.progress_dialog.setCancelButton(None)
                 self.progress_dialog.setMinimumDuration(0)
                 self.progress_dialog.show()
@@ -809,13 +809,13 @@ class BadgerLoopQtGraph(QMainWindow):
                         import shutil
                         shutil.copy2(fname, target_file)
                 except Exception as e:
-                    from PyQt5.QtWidgets import QMessageBox
+                    from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.critical(self, "Error", f"Failed to create mirror:\n{e}")
                     return
-                from PyQt5.QtWidgets import QMessageBox
+                from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.information(self, "Mirror Created", "To protect original data, a Mirror file has been created and loaded.")
             else:
-                from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton
+                from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton
                 dlg_mirror = QDialog(self)
                 dlg_mirror.setWindowTitle("Mirror File Exists")
                 dlg_mirror.setFixedSize(450, 150)
@@ -832,7 +832,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 l.addLayout(btn_box)
                 
                 ok.clicked.connect(dlg_mirror.accept); cancel.clicked.connect(dlg_mirror.reject)
-                if dlg_mirror.exec() != QDialog.Accepted: return
+                if dlg_mirror.exec() != QDialog.DialogCode.Accepted: return
                 
                 choice = combo.currentText()
                 if choice == "--- Create New Mirror ---":
@@ -851,9 +851,9 @@ class BadgerLoopQtGraph(QMainWindow):
             opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
             if self.file_type == "CSV": opts["delimiter"] = ","
                 
-            from PyQt5.QtWidgets import QProgressDialog
+            from PyQt6.QtWidgets import QProgressDialog
             self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None)
             self.progress_dialog.setMinimumDuration(0)
             self.progress_dialog.show()
@@ -896,11 +896,11 @@ class BadgerLoopQtGraph(QMainWindow):
                         import shutil
                         shutil.copy2(fname, target_file)
                 except Exception as e:
-                    from PyQt5.QtWidgets import QMessageBox
+                    from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.critical(self, "Error", f"Failed to create mirror:\n{e}")
                     return
             else:
-                from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton
+                from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton
                 dlg_mirror = QDialog(self)
                 dlg_mirror.setWindowTitle("Mirror File Exists")
                 dlg_mirror.setFixedSize(450, 150)
@@ -917,7 +917,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 l.addLayout(btn_box)
                 
                 ok.clicked.connect(dlg_mirror.accept); cancel.clicked.connect(dlg_mirror.reject)
-                if dlg_mirror.exec() != QDialog.Accepted: return
+                if dlg_mirror.exec() != QDialog.DialogCode.Accepted: return
                 
                 choice = combo.currentText()
                 if choice == "--- Create New Mirror ---":
@@ -935,9 +935,9 @@ class BadgerLoopQtGraph(QMainWindow):
             opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
             if self.file_type == "CSV": opts["delimiter"] = ","
                 
-            from PyQt5.QtWidgets import QProgressDialog
+            from PyQt6.QtWidgets import QProgressDialog
             self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None)
             self.progress_dialog.setMinimumDuration(0)
             self.progress_dialog.show()
@@ -957,7 +957,7 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def _show_actual_data_slicer(self):
         dlg = DataSlicerDialog(self)
-        if dlg.exec() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         
         target_idx, cond_idx, thresh, target_name = dlg.get_result()
         
@@ -992,12 +992,12 @@ class BadgerLoopQtGraph(QMainWindow):
             self._append_column_to_file(self.dataset.filename, name_below, blocks_below)
             self._append_column_to_file(self.dataset.filename, name_above, blocks_above)
             
-            from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QApplication
+            from PyQt6.QtWidgets import QMessageBox, QProgressDialog, QApplication
             QMessageBox.information(self, "Success", f"Successfully sliced data at {thresh:g}.\n\nCreated:\n1. {name_below}\n2. {name_above}")
             
             opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
             self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None)
             self.progress_dialog.setMinimumDuration(0)
             self.progress_dialog.show()
@@ -1011,11 +1011,11 @@ class BadgerLoopQtGraph(QMainWindow):
             
         except Exception as e:
             import traceback
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Execution Error", f"Failed to slice data:\n\n{e}\n\n{traceback.format_exc()}")
 
     def _show_actual_baseline_dialog(self):
-        from PyQt5.QtWidgets import QMessageBox, QDialog, QApplication, QProgressDialog
+        from PyQt6.QtWidgets import QMessageBox, QDialog, QApplication, QProgressDialog
         res = self._get_all_plotted_xy(apply_selection=False)
         if len(res) < 4 or len(res[0]) == 0: 
             QMessageBox.warning(self, "No Data", "Please plot a 2D curve first.")
@@ -1023,7 +1023,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
         # 1. Create the dialog as a floating, non-blocking palette
         self.baseline_dlg = BaselineSubtractionDialog(self)
-        self.baseline_dlg.setWindowModality(Qt.NonModal) 
+        self.baseline_dlg.setWindowModality(Qt.WindowModality.NonModal) 
         
         # 2. Lock the data columns so the user doesn't break the background arrays while drawing
         self.xcol.setEnabled(False)
@@ -1052,7 +1052,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 
                 opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
                 self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
-                self.progress_dialog.setWindowModality(Qt.WindowModal)
+                self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
                 self.progress_dialog.setCancelButton(None)
                 self.progress_dialog.setMinimumDuration(0)
                 self.progress_dialog.show()
@@ -1154,7 +1154,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
             opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
             self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None)
             self.progress_dialog.setMinimumDuration(0)
             self.progress_dialog.show()
@@ -1217,7 +1217,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 l.addLayout(btn_box)
                 
                 ok.clicked.connect(dlg.accept); cancel.clicked.connect(dlg.reject)
-                if dlg.exec() != QDialog.Accepted: return
+                if dlg.exec() != QDialog.DialogCode.Accepted: return
                 
                 choice = combo.currentText()
                 if choice == "--- Create New Mirror ---":
@@ -1237,7 +1237,7 @@ class BadgerLoopQtGraph(QMainWindow):
             if self.file_type == "CSV": opts["delimiter"] = ","
                 
             self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None) 
             self.progress_dialog.setMinimumDuration(0) 
             self.progress_dialog.show()
@@ -1257,7 +1257,7 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def _show_actual_phase_space_dialog(self):
         dlg = PhaseSpaceDialog(self.dataset, self)
-        if dlg.exec() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         state_idx, time_idx, new_name = dlg.get_result()
         if not new_name: return
 
@@ -1285,7 +1285,7 @@ class BadgerLoopQtGraph(QMainWindow):
             self._append_column_to_file(self.dataset.filename, new_name, calculated_data_blocks)
             opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
             self.progress_dialog = QProgressDialog("Refreshing Data & Plotting Phase Space...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None)
             self.progress_dialog.setMinimumDuration(0)
             self.progress_dialog.show()
@@ -1375,7 +1375,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 l.addLayout(btn_box)
                 
                 ok.clicked.connect(dlg.accept); cancel.clicked.connect(dlg.reject)
-                if dlg.exec() != QDialog.Accepted: return
+                if dlg.exec() != QDialog.DialogCode.Accepted: return
                 
                 choice = combo.currentText()
                 if choice == "--- Create New Mirror ---":
@@ -1396,7 +1396,7 @@ class BadgerLoopQtGraph(QMainWindow):
             if self.file_type == "CSV": opts["delimiter"] = ","
                 
             self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None) 
             self.progress_dialog.setMinimumDuration(0) 
             self.progress_dialog.show()
@@ -1430,7 +1430,7 @@ class BadgerLoopQtGraph(QMainWindow):
         target_vb = self.vb_right if axis_side == "R" else self.plot_widget
         
         import pyqtgraph as pg
-        from PyQt5.QtCore import Qt
+        from PyQt6.QtCore import Qt
         
         # 1. Draw the Green Stars at the very tip of the peaks
         scatter = pg.ScatterPlotItem(x=peaks_x, y=peaks_y, size=14, pen=pg.mkPen('k', width=1.5), brush=pg.mkBrush('#00ff00'), symbol='star')
@@ -1445,7 +1445,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
         # 3. Draw vertical dashed lines dropping down from the peak
         for px in peaks_x:
-            vline = pg.InfiniteLine(pos=px, angle=90, pen=pg.mkPen((150, 150, 150, 150), style=Qt.DashLine))
+            vline = pg.InfiniteLine(pos=px, angle=90, pen=pg.mkPen((150, 150, 150, 150), style=Qt.PenStyle.DashLine))
             target_vb.addItem(vline)
             self.peak_markers.append((vline, target_vb))
 
@@ -1601,7 +1601,7 @@ class BadgerLoopQtGraph(QMainWindow):
         checkbox = QPushButton("✓ Do not show this again")
         checkbox.setCheckable(True)
         checkbox.setChecked(False)
-        layout.addWidget(checkbox, alignment=Qt.AlignLeft)
+        layout.addWidget(checkbox, alignment=Qt.AlignmentFlag.AlignLeft)
         buttons = QHBoxLayout()
         yes, no = QPushButton("Yes"), QPushButton("No")
         buttons.addStretch(); buttons.addWidget(yes); buttons.addWidget(no)
@@ -1612,7 +1612,7 @@ class BadgerLoopQtGraph(QMainWindow):
             dialog.accept()
         yes.clicked.connect(accept)
         no.clicked.connect(dialog.reject)
-        return dialog.exec() == QDialog.Accepted
+        return dialog.exec() == QDialog.DialogCode.Accepted
 
     def show_help(self):
         HelpDialog(self).exec()
@@ -1624,7 +1624,7 @@ class BadgerLoopQtGraph(QMainWindow):
         was_portable = self.settings.value("portable_mode", False, bool)
         was_dark = self.settings.value("dark_mode", False, bool)
         
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             new_settings = dlg.get_results()
             
             # ... (Keep your portable mode migration logic exactly the same) ...
@@ -1715,7 +1715,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 btn_box.addWidget(ok); btn_box.addWidget(cancel)
                 l.addLayout(btn_box)
                 ok.clicked.connect(dlg.accept); cancel.clicked.connect(dlg.reject)
-                if dlg.exec() != QDialog.Accepted: return
+                if dlg.exec() != QDialog.DialogCode.Accepted: return
                 
                 choice = combo.currentText()
                 if choice == "--- Create New Mirror ---":
@@ -1737,7 +1737,7 @@ class BadgerLoopQtGraph(QMainWindow):
             if self.file_type == "CSV": opts["delimiter"] = ","
             
             self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None) 
             self.progress_dialog.setMinimumDuration(0) 
             self.progress_dialog.show()
@@ -1758,7 +1758,7 @@ class BadgerLoopQtGraph(QMainWindow):
     def _show_actual_manage_columns_dialog(self):
         """ The standard dialog logic that actually applies the change to the safe file. """
         dlg = ManageColumnsDialog(self.dataset, self)
-        if dlg.exec() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
     
         action, col_idx, new_name = dlg.get_result()
         
@@ -1772,15 +1772,15 @@ class BadgerLoopQtGraph(QMainWindow):
             ans = QMessageBox.warning(
                 self, "Confirm Deletion", 
                 f"Are you sure you want to permanently delete the column '{col_name}' from the mirror file?\n\nThis action is irreversible.", 
-                QMessageBox.Yes | QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            if ans != QMessageBox.Yes: return
+            if ans != QMessageBox.StandardButton.Yes: return
             self._delete_column_in_file(self.dataset.filename, col_idx)
 
         # Trigger full dataset reload to sync memory, arrays, and UI instantly
         opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
         self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
-        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress_dialog.setCancelButton(None)
         self.progress_dialog.setMinimumDuration(0)
         self.progress_dialog.show()
@@ -1837,7 +1837,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 btn_box.addWidget(ok); btn_box.addWidget(cancel)
                 l.addLayout(btn_box)
                 ok.clicked.connect(dlg.accept); cancel.clicked.connect(dlg.reject)
-                if dlg.exec() != QDialog.Accepted: return
+                if dlg.exec() != QDialog.DialogCode.Accepted: return
                 
                 choice = combo.currentText()
                 if choice == "--- Create New Mirror ---":
@@ -1856,7 +1856,7 @@ class BadgerLoopQtGraph(QMainWindow):
             if self.file_type == "CSV": opts["delimiter"] = ","
             
             self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None)
             self.progress_dialog.setMinimumDuration(0)
             self.progress_dialog.show()
@@ -1920,7 +1920,7 @@ class BadgerLoopQtGraph(QMainWindow):
             opts["file_list"] = new_file_list
             
             self.progress_dialog = QProgressDialog("Building Mirror Folder...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None)
             self.progress_dialog.show()
             QApplication.processEvents()
@@ -1946,7 +1946,7 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def _show_actual_create_column_dialog(self):
         dlg = CreateColumnDialog(self.dataset, self)
-        if dlg.exec() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         new_col_name, raw_equation = dlg.get_equation_data()
         if not new_col_name or not raw_equation: return
 
@@ -2026,7 +2026,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
             opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
             self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None)
             self.progress_dialog.setMinimumDuration(0)
             self.progress_dialog.show()
@@ -2105,7 +2105,7 @@ class BadgerLoopQtGraph(QMainWindow):
         x, y, _, pair = res
 
         # 1. Setup the discrete percentage bar
-        from PyQt5.QtWidgets import QProgressDialog
+        from PyQt6.QtWidgets import QProgressDialog
         self.progress_dlg = QProgressDialog(f"Fitting {func_type}...", "Cancel", 0, 100, self)
         self.progress_dlg.setWindowTitle("Processing")
         self.progress_dlg.setModal(True)
@@ -2122,7 +2122,7 @@ class BadgerLoopQtGraph(QMainWindow):
             self.progress_dlg.setValue(99)
             
             import pyqtgraph as pg
-            from PyQt5.QtCore import Qt
+            from PyQt6.QtCore import Qt
             
             # Handle dark mode colours
             fit_colour = "w" if self.bg_color_combo.currentText() == "Black" else "k"
@@ -2130,7 +2130,7 @@ class BadgerLoopQtGraph(QMainWindow):
             # --- FIX: Use PlotCurveItem directly to enable hardware clipping ---
             plot_item = pg.PlotCurveItem(
                 x=fit_res["xfit"], y=fit_res["yfit"], 
-                pen=pg.mkPen(fit_colour, width=2, style=Qt.DashLine),
+                pen=pg.mkPen(fit_colour, width=2, style=Qt.PenStyle.DashLine),
                 clipToView=True, 
                 autoDownsample=True
             )
@@ -2180,17 +2180,17 @@ class BadgerLoopQtGraph(QMainWindow):
     def open_fit_function_dialog(self):
         if not self.dataset: return
         dlg = FitFunctionDialog(self)
-        if dlg.exec() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         
         func_type, degree_text, log_base_text, param_config = dlg.get_result()
         self._launch_common_fit_pipeline(func_type, degree_text, log_base_text, param_config)
             
     def open_custom_fit_dialog(self):
-        from PyQt5.QtWidgets import QDialog
+        from PyQt6.QtWidgets import QDialog
         if not self.dataset: return
         dlg = CustomFitDialog(self.dataset, self)
         
-        if dlg.exec() != QDialog.Accepted: 
+        if dlg.exec() != QDialog.DialogCode.Accepted: 
             if hasattr(self, 'phantom_curve'): self.phantom_curve.setVisible(False)
             return
             
@@ -2214,7 +2214,7 @@ class BadgerLoopQtGraph(QMainWindow):
         final_params = [param_config[p]["value"] for p in param_names]
         
         # 1. Set up the pulsing Progress Bar popup for evaluation only
-        from PyQt5.QtWidgets import QProgressDialog
+        from PyQt6.QtWidgets import QProgressDialog
         self.progress_dlg = QProgressDialog("Finalising custom fit... Please wait.", "Cancel", 0, 0, self)
         self.progress_dlg.setWindowTitle("Processing")
         self.progress_dlg.setModal(True)
@@ -2268,12 +2268,12 @@ class BadgerLoopQtGraph(QMainWindow):
             # ----------------------------------------
 
             import pyqtgraph as pg
-            from PyQt5.QtCore import Qt
+            from PyQt6.QtCore import Qt
             
             # --- ENABLE HARDWARE VIEWPORT CLIPPING ---
             plot_item = pg.PlotCurveItem(
                 x=xfit, y=yfit, 
-                pen=pg.mkPen("r", width=2, style=Qt.DashLine),
+                pen=pg.mkPen("r", width=2, style=Qt.PenStyle.DashLine),
                 clipToView=True, 
                 autoDownsample=True
             )
@@ -2318,11 +2318,11 @@ class BadgerLoopQtGraph(QMainWindow):
         if not self.dataset: return
         
         from ui.dialogs.fitting_3d import CustomFit3DDialog
-        from PyQt5.QtWidgets import QDialog
+        from PyQt6.QtWidgets import QDialog
         import numpy as np
         
         dlg = CustomFit3DDialog(self.dataset, self)
-        if dlg.exec() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         
         # 1. Intercept the returned data (Now expecting pcov!)
         raw_eq, py_eq, html_eq, used_cols, param_names, param_config, pcov = dlg.get_result()
@@ -2489,18 +2489,18 @@ class BadgerLoopQtGraph(QMainWindow):
             fit = self.active_fits[0]
         else:
             dlg = MultiFitManagerDialog(self.active_fits, "Edit", self)
-            if dlg.exec() == QDialog.Accepted:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
                 _, idx = dlg.get_selection()
                 fit = self.active_fits[idx]
             else:
                 return
 
         if fit["type"] == "custom":
-            from PyQt5.QtWidgets import QDialog
+            from PyQt6.QtWidgets import QDialog
             dlg = CustomFitDialog(self.dataset, self)
             dlg.load_state(fit)
             
-            if dlg.exec() == QDialog.Accepted:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
                 self.plot_widget.removeItem(fit["plot_item"])
                 self.fit_legend.removeItem(fit["plot_item"])
                 self.active_fits.pop(idx)
@@ -2575,8 +2575,8 @@ class BadgerLoopQtGraph(QMainWindow):
                 yfit = plot_model(xfit, smooth_aux, *final_params)
 
                 import pyqtgraph as pg
-                from PyQt5.QtCore import Qt
-                plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("r", width=2, style=Qt.DashLine))
+                from PyQt6.QtCore import Qt
+                plot_item = self.plot_widget.plot(xfit, yfit, pen=pg.mkPen("r", width=2, style=Qt.PenStyle.DashLine))
                 fit_name = f"Custom Fit ➔ {pair['y_name']}"
                 self.fit_legend.addItem(plot_item, fit_name)
 
@@ -2599,7 +2599,7 @@ class BadgerLoopQtGraph(QMainWindow):
         else:
             dlg = FitFunctionDialog(self)
             dlg.load_state(fit)
-            if dlg.exec() == QDialog.Accepted:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
                 self.plot_widget.removeItem(fit["plot_item"])
                 self.fit_legend.removeItem(fit["plot_item"])
                 self.active_fits.pop(idx)
@@ -2633,7 +2633,7 @@ class BadgerLoopQtGraph(QMainWindow):
         else:
             from ui.dialogs.fitting import MultiFitManagerDialog
             dlg = MultiFitManagerDialog(active_list, "Delete", self)
-            if dlg.exec() == QDialog.Accepted:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
                 res_type, idx = dlg.get_selection()
                 if res_type == "all":
                     for fit in active_list:
@@ -2668,13 +2668,13 @@ class BadgerLoopQtGraph(QMainWindow):
         else:
             from ui.dialogs.fitting import MultiFitManagerDialog
             dlg = MultiFitManagerDialog(active_list, "Save", self)
-            if dlg.exec() == QDialog.Accepted:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
                 _, idx = dlg.get_selection()
                 fit = active_list[idx]
             else:
                 return
 
-        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
         import numpy as np
         
         # --- NEW: Ask the user about statistics ---
@@ -2683,9 +2683,9 @@ class BadgerLoopQtGraph(QMainWindow):
             ans = QMessageBox.question(
                 self, "Include Statistics", 
                 "Would you like to include the fit statistics (\u03c7\u00b2, RMSE, Uncertainties) in the saved file?",
-                QMessageBox.Yes | QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            include_stats = (ans == QMessageBox.Yes)
+            include_stats = (ans == QMessageBox.StandardButton.Yes)
         # ------------------------------------------
 
         fname, _ = QFileDialog.getSaveFileName(self, "Save Function", "", "Text files (*.txt)")
@@ -2740,13 +2740,13 @@ class BadgerLoopQtGraph(QMainWindow):
         else:
             from ui.dialogs.fitting import MultiFitManagerDialog
             dlg = MultiFitManagerDialog(self.active_fits, "Export", self)
-            if dlg.exec() == QDialog.Accepted:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
                 _, idx = dlg.get_selection()
                 fit = self.active_fits[idx]
             else:
                 return
 
-        from PyQt5.QtWidgets import QInputDialog, QLineEdit, QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit, QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton
         default_name = f"Fit_{fit['type'].capitalize()}"
         new_name, ok = QInputDialog.getText(self, "Export Fit", "Enter a name for the new column:", QLineEdit.Normal, default_name)
         if not ok or not new_name.strip(): return
@@ -2792,7 +2792,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 btn_box.addWidget(ok_btn); btn_box.addWidget(cancel_btn)
                 l.addLayout(btn_box)
                 ok_btn.clicked.connect(dlg.accept); cancel_btn.clicked.connect(dlg.reject)
-                if dlg.exec() != QDialog.Accepted: return
+                if dlg.exec() != QDialog.DialogCode.Accepted: return
                 
                 choice = combo.currentText()
                 if choice == "--- Create New Mirror ---":
@@ -2810,7 +2810,7 @@ class BadgerLoopQtGraph(QMainWindow):
             if self.file_type == "CSV": opts["delimiter"] = ","
             
             self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None) 
             self.progress_dialog.setMinimumDuration(0) 
             self.progress_dialog.show()
@@ -2859,12 +2859,12 @@ class BadgerLoopQtGraph(QMainWindow):
         try:
             self._append_column_to_file(self.dataset.filename, new_name, calculated_data_blocks)
             
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.information(self, "Success", f"Fit exported to column '{new_name}' successfully.")
             
             opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
             self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None)
             self.progress_dialog.setMinimumDuration(0)
             self.progress_dialog.show()
@@ -2878,7 +2878,7 @@ class BadgerLoopQtGraph(QMainWindow):
             
         except Exception as e:
             import traceback
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Execution Error", f"Failed to export fit:\n\n{e}\n\n{traceback.format_exc()}")
 
     def open_fit_data_to_function(self):
@@ -2891,7 +2891,7 @@ class BadgerLoopQtGraph(QMainWindow):
         from ui.dialogs.fitting_3d import Fit3DSurfaceDialog, execute_3d_surface_fit
         
         dlg = Fit3DSurfaceDialog(self)
-        if dlg.exec() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         
         func_type, param_config, degree, eq_str = dlg.get_result()
         
@@ -2982,10 +2982,10 @@ class BadgerLoopQtGraph(QMainWindow):
         tab1 = QWidget()
         l1 = QFormLayout(tab1)
         
-        self.axis_thick_slider = QSlider(Qt.Horizontal)
+        self.axis_thick_slider = QSlider(Qt.Orientation.Horizontal)
         self.axis_thick_slider.setRange(1, 10)
         self.axis_thick_slider.setValue(1)
-        self.axis_thick_slider.setTickPosition(QSlider.TicksBelow)
+        self.axis_thick_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.axis_thick_slider.setTickInterval(1)
         
         self.axis_thick_label = QLabel("1 px")
@@ -3029,6 +3029,7 @@ class BadgerLoopQtGraph(QMainWindow):
         tab2 = QWidget()
         l2 = QFormLayout(tab2)
         self.font_family_combo = QFontComboBox()
+        self.font_family_combo.setFontFilters(QFontComboBox.FontFilter.ScalableFonts)
         l2.addRow("Font Family:", self.font_family_combo)
         self.label_fontsize_edit = QLineEdit("14")
         l2.addRow("Axis Label Size:", self.label_fontsize_edit)
@@ -3116,7 +3117,7 @@ class BadgerLoopQtGraph(QMainWindow):
         l5.addRow("", self.gl_surface_snap_cb)
         # -----------------------------
         
-        from PyQt5.QtWidgets import QDoubleSpinBox
+        from PyQt6.QtWidgets import QDoubleSpinBox
         self.gl_scale_x = QDoubleSpinBox(); self.gl_scale_x.setRange(0.01, 100); self.gl_scale_x.setValue(1.0); self.gl_scale_x.setSingleStep(0.1)
         self.gl_scale_y = QDoubleSpinBox(); self.gl_scale_y.setRange(0.01, 100); self.gl_scale_y.setValue(1.0); self.gl_scale_y.setSingleStep(0.1)
         self.gl_scale_z = QDoubleSpinBox(); self.gl_scale_z.setRange(0.01, 100); self.gl_scale_z.setValue(1.0); self.gl_scale_z.setSingleStep(0.1)
@@ -3173,7 +3174,7 @@ class BadgerLoopQtGraph(QMainWindow):
         self.leg_cols.setRange(1, 10)
         self.leg_cols.setValue(1)
         
-        self.leg_opacity = QSlider(Qt.Horizontal)
+        self.leg_opacity = QSlider(Qt.Orientation.Horizontal)
         self.leg_opacity.setRange(0, 255)
         self.leg_opacity.setValue(230)
         
@@ -3212,7 +3213,7 @@ class BadgerLoopQtGraph(QMainWindow):
         else: current_raw = current_data or "" 
             
         dlg = RichTextAxisLabelDialog(axis_key.replace('_3d', ''), current_raw, self)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             raw_text, html_text = dlg.get_result()
             if raw_text: self.custom_axis_labels[axis_key] = {"raw": raw_text, "html": html_text}
             else: self.custom_axis_labels[axis_key] = None
@@ -3387,7 +3388,7 @@ class BadgerLoopQtGraph(QMainWindow):
         mode_layout.addWidget(self.btn_lasso)
         controls.addLayout(mode_layout)
         
-        self.selection_curve = pg.PlotCurveItem(pen=pg.mkPen('#0055ff', width=2, style=Qt.DashLine))
+        self.selection_curve = pg.PlotCurveItem(pen=pg.mkPen('#0055ff', width=2, style=Qt.PenStyle.DashLine))
         self.plot_widget.addItem(self.selection_curve, ignoreBounds=True)
         self.selection_curve.hide()
         
@@ -3404,9 +3405,9 @@ class BadgerLoopQtGraph(QMainWindow):
         
         self.series_list = QListWidget()
         self.series_list.setMaximumHeight(100)
-        self.series_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.series_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.series_list.setTextElideMode(Qt.ElideNone)
+        self.series_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.series_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.series_list.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.series_list.itemSelectionChanged.connect(self.update_active_layer)
         
         controls.addWidget(self.series_list)
@@ -3534,8 +3535,8 @@ class BadgerLoopQtGraph(QMainWindow):
                 
         self.vLine = pg.InfiniteLine(angle=90, movable=False)
         self.hLine = pg.InfiniteLine(angle=0, movable=False)
-        self.vLine.setPen(pg.mkPen(color='k', style=Qt.DashLine))
-        self.hLine.setPen(pg.mkPen(color='k', style=Qt.DashLine))
+        self.vLine.setPen(pg.mkPen(color='k', style=Qt.PenStyle.DashLine))
+        self.hLine.setPen(pg.mkPen(color='k', style=Qt.PenStyle.DashLine))
         
         self.plot_widget.addItem(self.vLine, ignoreBounds=True)
         self.plot_widget.addItem(self.hLine, ignoreBounds=True)
@@ -3601,7 +3602,7 @@ class BadgerLoopQtGraph(QMainWindow):
     def open_legend_customizer(self, legend_item):
         if not hasattr(self, 'current_legend_entries') or not self.current_legend_entries: return
         dlg = LegendCustomizationDialog(self, self.current_legend_entries, self.legend_aliases, getattr(self, 'group_sweeps_legend', False))
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             new_aliases, group_sweeps = dlg.get_result()
             self.legend_aliases = new_aliases
             self.group_sweeps_legend = group_sweeps
@@ -3769,14 +3770,14 @@ class BadgerLoopQtGraph(QMainWindow):
         active_list = getattr(self, 'active_3d_fits', []) if self.plot_mode == "3D" else getattr(self, 'active_fits', [])
         if not active_list: return
         
-        from PyQt5.QtWidgets import QDialog, QMessageBox
+        from PyQt6.QtWidgets import QDialog, QMessageBox
         
         if len(active_list) == 1:
             fit = active_list[0]
         else:
             from ui.dialogs.fitting import MultiFitManagerDialog
             dlg = MultiFitManagerDialog(active_list, "View", self)
-            if dlg.exec() == QDialog.Accepted:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
                 _, idx = dlg.get_selection()
                 fit = active_list[idx]
             else:
@@ -3839,8 +3840,8 @@ class BadgerLoopQtGraph(QMainWindow):
             ftype = "2D Harmonic (Sine Wave)"
             eq_str = f"<span style='{math_style}'>Z = A &middot; sin(&omega;<sub>x</sub>X + &phi;<sub>x</sub>) &middot; sin(&omega;<sub>y</sub>Y + &phi;<sub>y</sub>)</span>"
             coeff_str = f"A = {fit['params'][0]:.6e}<br>&omega;<sub>x</sub> = {fit['params'][1]:.6e}<br>&phi;<sub>x</sub> = {fit['params'][2]:.6e}<br>&omega;<sub>y</sub> = {fit['params'][3]:.6e}<br>&phi;<sub>y</sub> = {fit['params'][4]:.6e}"
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel, QPushButton, QGroupBox
-        from PyQt5.QtCore import Qt
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel, QPushButton, QGroupBox
+        from PyQt6.QtCore import Qt
         import numpy as np
 
         dlg = QDialog(self)
@@ -3855,7 +3856,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
         # Helper function to generate clean, highly-optimised UI boxes
         def create_scroll_box(title, html_content, text_colour):
-            from PyQt5.QtWidgets import QGroupBox, QVBoxLayout, QTextBrowser
+            from PyQt6.QtWidgets import QGroupBox, QVBoxLayout, QTextBrowser
             group = QGroupBox(title)
             # Make the group box frame blend cleanly with the theme
             group.setStyleSheet(f"""
@@ -3916,7 +3917,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 calc_btn.setEnabled(False)
                 calc_btn.setText("Evaluating Dataset...")
                 
-                from PyQt5.QtWidgets import QProgressDialog
+                from PyQt6.QtWidgets import QProgressDialog
                 import numpy as np
                 from ui.dialogs.fitting import calculate_fit_statistics
                 
@@ -4128,7 +4129,7 @@ class BadgerLoopQtGraph(QMainWindow):
             self.setMaximumSize(16777215, 16777215)
             return # Exit early, skipping all teleportation and locking logic!
 
-        from PyQt5.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         screens = QApplication.screens()
         
         try:
@@ -4239,17 +4240,20 @@ class BadgerLoopQtGraph(QMainWindow):
         self.plot()
 
     def _fix_graphics_view(self):
+        from PyQt6.QtWidgets import QGraphicsView
         view = self.plot_widget.getViewBox().scene().views()[0]
-        view.setViewportUpdateMode(view.FullViewportUpdate)
-        view.setCacheMode(view.CacheNone)
+        
+        # PyQt6 Update: Strict Enums for QGraphicsView
+        view.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        view.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)
 
     def _patch_pyqtgraph_menu(self):
         menu = self.plot_widget.getViewBox().menu
         def fix_palette():
             for w in menu.findChildren(QLineEdit):
                 pal = w.palette()
-                pal.setColor(QPalette.Base, QColor("white"))
-                pal.setColor(QPalette.Text, QColor("black"))
+                pal.setColor(QPalette.ColorRole.Base, QColor("white"))
+                pal.setColor(QPalette.ColorRole.Text, QColor("black"))
                 w.setPalette(pal)
         menu.aboutToShow.connect(fix_palette)
 
@@ -4275,19 +4279,19 @@ class BadgerLoopQtGraph(QMainWindow):
             if app:
                 app.setStyle("Fusion")
                 dark_palette = QPalette()
-                dark_palette.setColor(QPalette.Window, QColor(53, 53, 53))
-                dark_palette.setColor(QPalette.WindowText, Qt.white)
-                dark_palette.setColor(QPalette.Base, QColor(35, 35, 35))
-                dark_palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
-                dark_palette.setColor(QPalette.ToolTipBase, Qt.white)
-                dark_palette.setColor(QPalette.ToolTipText, Qt.white)
-                dark_palette.setColor(QPalette.Text, Qt.white)
-                dark_palette.setColor(QPalette.Button, QColor(53, 53, 53))
-                dark_palette.setColor(QPalette.ButtonText, Qt.white)
-                dark_palette.setColor(QPalette.BrightText, Qt.red)
-                dark_palette.setColor(QPalette.Link, QColor(42, 130, 218))
-                dark_palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
-                dark_palette.setColor(QPalette.HighlightedText, Qt.black)
+                dark_palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
+                dark_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
+                dark_palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
+                dark_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
+                dark_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
+                dark_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
+                dark_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+                dark_palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
+                dark_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
+                dark_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
+                dark_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+                dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+                dark_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
                 app.setPalette(dark_palette)
                 
             self.setStyleSheet("""
@@ -4394,7 +4398,7 @@ class BadgerLoopQtGraph(QMainWindow):
         except ValueError: label_size = 12
 
         font = pg.QtGui.QFont(font_family, tick_size)
-        label_font = pg.QtGui.QFont(font_family, label_size, pg.QtGui.QFont.Bold)
+        label_font = pg.QtGui.QFont(font_family, label_size, pg.QtGui.QFont.Weight.Bold)
         
         # --- NEW: DYNAMIC 3D TEXT COLOURS ---
         bg_val = self.bg_color_combo.currentText()
@@ -4753,7 +4757,7 @@ class BadgerLoopQtGraph(QMainWindow):
         # Pass the auto-detected type into the dialog!
         dlg = FileImportDialog(self, detected_type=detected_type)
         
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             opts = dlg.get_options()
             
             # --- The Mismatch Shields remain exactly the same! ---
@@ -4809,9 +4813,9 @@ class BadgerLoopQtGraph(QMainWindow):
                     msg.setText(f"{sel_name} delimiter selected, but {det_name} delimiter detected.")
                     msg.setInformativeText("How would you like to proceed?")
                     
-                    btn_detected = msg.addButton(f"Use {det_name}", QMessageBox.AcceptRole)
-                    btn_anyway = msg.addButton("Try Anyway", QMessageBox.DestructiveRole)
-                    btn_cancel = msg.addButton("Cancel", QMessageBox.RejectRole)
+                    btn_detected = msg.addButton(f"Use {det_name}", QMessageBox.ButtonRole.AcceptRole)
+                    btn_anyway = msg.addButton("Try Anyway", QMessageBox.ButtonRole.DestructiveRole)
+                    btn_cancel = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
                     msg.exec()
                     
                     if msg.clickedButton() == btn_cancel: return 
@@ -4822,7 +4826,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 except: pass
             self.progress_dialog = QProgressDialog("Initializing...", "Cancel", 0, 100, self)
             self.progress_dialog.setWindowTitle("Loading Data")
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None) 
             self.progress_dialog.setAutoClose(False)
             self.progress_dialog.setMinimumDuration(0) 
@@ -4849,7 +4853,7 @@ class BadgerLoopQtGraph(QMainWindow):
         dlg.file_type.setCurrentText("CSV")
         dlg.file_type.setEnabled(False) 
         
-        if dlg.exec() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         opts = dlg.get_options()
         
         import csv
@@ -4860,7 +4864,7 @@ class BadgerLoopQtGraph(QMainWindow):
         errors = []
         
         self.progress_dialog = QProgressDialog("Scanning folder signatures...", "Cancel", 0, len(all_files), self)
-        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress_dialog.show()
         
         # --- PHASE 1: SCAN ALL FILES ---
@@ -4902,7 +4906,7 @@ class BadgerLoopQtGraph(QMainWindow):
             target_sig = list(signatures.keys())[0] 
         else:
             sel_dlg = TemplateSelectionDialog(signatures, self)
-            if sel_dlg.exec() != QDialog.Accepted: return
+            if sel_dlg.exec() != QDialog.DialogCode.Accepted: return
             target_sig = sel_dlg.get_selected_signature()
             
         valid_files = signatures[target_sig]
@@ -4941,7 +4945,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
         try:
             self.progress_dialog = QProgressDialog("Concatenating files...", "Cancel", 0, len(self.dataset.file_list), self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.show()
             
             with open(save_path, 'w', encoding='utf-8-sig', newline='') as out_f:
@@ -5058,7 +5062,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 try: self.progress_dialog.accept()
                 except: pass
             import traceback
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Load Error", f"Failed to process loaded file:\n\n{e}\n\n{traceback.format_exc()}")
 
     def _on_load_error(self, err_msg):
@@ -5104,7 +5108,7 @@ class BadgerLoopQtGraph(QMainWindow):
             current_raw = current_data or "" # Backwards compatibility for old saved strings
             
         dlg = RichTextAxisLabelDialog(orientation, current_raw, self)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             raw_text, html_text = dlg.get_result()
             if raw_text:
                 self.custom_axis_labels[orientation] = {"raw": raw_text, "html": html_text}
@@ -5113,7 +5117,7 @@ class BadgerLoopQtGraph(QMainWindow):
             self.plot()
             
     def _prompt_legend_rename(self, sig_key, current_name):
-        from PyQt5.QtWidgets import QInputDialog, QLineEdit
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit
         new_name, ok = QInputDialog.getText(
             self, 
             "Rename Legend Entry", 
@@ -5414,7 +5418,7 @@ class BadgerLoopQtGraph(QMainWindow):
             except: pass
         self.progress_dialog = QProgressDialog("Processing Data...", None, 0, 100, self)
         self.progress_dialog.setWindowTitle("Plotting")
-        self.progress_dialog.setWindowModality(Qt.WindowModal) 
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal) 
         self.progress_dialog.setMinimumDuration(0)
         self.progress_dialog.show()
         QApplication.processEvents()
@@ -5431,7 +5435,7 @@ class BadgerLoopQtGraph(QMainWindow):
             self._is_plotting = False
             if hasattr(self, 'progress_dialog'): self.progress_dialog.accept()
             import traceback
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Plotting Error", f"Failed to initialize the plot engine:\n\n{e}\n\n{traceback.format_exc()}")
         
     def _on_plot_error(self, err_msg):
@@ -5515,9 +5519,9 @@ class BadgerLoopQtGraph(QMainWindow):
             msg = QMessageBox(self)
             msg.setWindowTitle("File Exists")
             msg.setText("This file already exists.\n\nWould you like to Append the new columns to it, or Overwrite it entirely?")
-            btn_append = msg.addButton("Append", QMessageBox.AcceptRole)
-            btn_overwrite = msg.addButton("Overwrite", QMessageBox.DestructiveRole)
-            btn_cancel = msg.addButton("Cancel", QMessageBox.RejectRole)
+            btn_append = msg.addButton("Append", QMessageBox.ButtonRole.AcceptRole)
+            btn_overwrite = msg.addButton("Overwrite", QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancel = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
             msg.exec()
             
             if msg.clickedButton() == btn_cancel: return
@@ -5652,7 +5656,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
         res = self._get_all_plotted_xy(apply_selection=False)
         if len(res) < 4 or len(res[0]) == 0: 
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "No Data", "Please plot a 2D curve first.")
             return
 
@@ -5662,13 +5666,13 @@ class BadgerLoopQtGraph(QMainWindow):
             except: pass
             
         self.auc_dlg = AreaUnderCurveDialog(self)
-        self.auc_dlg.setWindowModality(Qt.NonModal)
+        self.auc_dlg.setWindowModality(Qt.WindowModality.NonModal)
         
         def on_accept():
             method = self.auc_dlg.get_result()
             x_sel, y_sel, _, pair = self._get_all_plotted_xy(apply_selection=True)
             if len(x_sel) < 3:
-                from PyQt5.QtWidgets import QMessageBox
+                from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "Not Enough Data", "Select a larger region of data to integrate.")
                 self.auc_dlg.show() # Pop it back up so they can try again
                 return
@@ -5697,7 +5701,7 @@ class BadgerLoopQtGraph(QMainWindow):
             except: pass
             
         self.spec_dlg = SpectrogramDialog(self, len(x_full))
-        self.spec_dlg.setWindowModality(Qt.NonModal) # Let user click around the main UI
+        self.spec_dlg.setWindowModality(Qt.WindowModality.NonModal) # Let user click around the main UI
         
         def run_stft():
             import scipy.signal as sig
@@ -5755,7 +5759,7 @@ class BadgerLoopQtGraph(QMainWindow):
     def _activate_auc_line_tool(self, dialog_ref):
         import pyqtgraph as pg
         import numpy as np
-        from PyQt5.QtWidgets import QPushButton
+        from PyQt6.QtWidgets import QPushButton
         
         x_full, y_full, _, _ = self._get_all_plotted_xy(apply_selection=False)
         if len(x_full) == 0: return
@@ -5850,9 +5854,9 @@ class BadgerLoopQtGraph(QMainWindow):
         if not hasattr(self, 'auc_items'): self.auc_items = []
         if not self.auc_data_records: return
         
-        from PyQt5.QtWidgets import QGraphicsPolygonItem
-        from PyQt5.QtGui import QPolygonF
-        from PyQt5.QtCore import QPointF
+        from PyQt6.QtWidgets import QGraphicsPolygonItem
+        from PyQt6.QtGui import QPolygonF
+        from PyQt6.QtCore import QPointF
         import pyqtgraph as pg
         
         total_area = 0.0
@@ -5940,7 +5944,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
         from ui.dialogs.analysis_hist import SmartBinningDialog
         dlg = SmartBinningDialog(y_data, self.bins_edit.text(), self)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             self.bins_edit.setText(dlg.get_result())
             self.plot()
 
@@ -5951,7 +5955,7 @@ class BadgerLoopQtGraph(QMainWindow):
         
         from ui.dialogs.analysis_hist import CDFOverlayDialog
         dlg = CDFOverlayDialog(self)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             color, thickness = dlg.get_result()
             
             y_sorted = np.sort(y_data[np.isfinite(y_data)])
@@ -5982,8 +5986,8 @@ class BadgerLoopQtGraph(QMainWindow):
 
     def open_sigma_clipping(self):
         # Safely scope all UI elements at the very top of the function
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton, QMessageBox, QProgressDialog
-        from PyQt5.QtCore import Qt
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QPushButton, QMessageBox, QProgressDialog
+        from PyQt6.QtCore import Qt
         import os
         import glob
         import re
@@ -5997,7 +6001,7 @@ class BadgerLoopQtGraph(QMainWindow):
         from ui.dialogs.analysis_hist import SigmaClippingDialog
         dlg = SigmaClippingDialog(y_data, self)
         
-        if dlg.exec() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         
         lower, upper = dlg.get_result()
         new_name = f"{pair.get('y_name', 'Y')} (Clipped)"
@@ -6067,7 +6071,7 @@ class BadgerLoopQtGraph(QMainWindow):
                 l.addLayout(btn_box)
                 
                 ok.clicked.connect(dlg_mirror.accept); cancel.clicked.connect(dlg_mirror.reject)
-                if dlg_mirror.exec() != QDialog.Accepted: return
+                if dlg_mirror.exec() != QDialog.DialogCode.Accepted: return
                 
                 choice = combo.currentText()
                 if choice == "--- Create New Mirror ---":
@@ -6086,7 +6090,7 @@ class BadgerLoopQtGraph(QMainWindow):
             if self.file_type == "CSV": opts["delimiter"] = ","
                 
             self.progress_dialog = QProgressDialog("Loading Mirror File...", "Cancel", 0, 100, self)
-            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setCancelButton(None) 
             self.progress_dialog.setMinimumDuration(0) 
             self.progress_dialog.show()
@@ -6118,11 +6122,11 @@ class BadgerLoopQtGraph(QMainWindow):
         self._append_column_to_file(self.dataset.filename, new_name, calculated_blocks)
         
         opts = getattr(self, 'last_load_opts', {"type": self.file_type, "delimiter": ",", "has_header": True})
-        from PyQt5.QtWidgets import QProgressDialog, QApplication
-        from PyQt5.QtCore import Qt
+        from PyQt6.QtWidgets import QProgressDialog, QApplication
+        from PyQt6.QtCore import Qt
         
         self.progress_dialog = QProgressDialog("Refreshing Data...", "Cancel", 0, 100, self)
-        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress_dialog.setCancelButton(None)
         self.progress_dialog.setMinimumDuration(0)
         self.progress_dialog.show()

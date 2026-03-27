@@ -3,9 +3,9 @@ import os
 import re
 import numpy as np
 from datetime import datetime
-from PyQt5.QtCore import Qt, QTimer, QAbstractTableModel, QModelIndex
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QTimer, QAbstractTableModel, QModelIndex
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTextEdit, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView,
     QFormLayout, QComboBox, QLineEdit, QWidget, QCheckBox, QTabWidget, QGroupBox,
@@ -157,19 +157,19 @@ class NumpyTableModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()):
         return len(self._headers)
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid(): return None
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             val = self._data[index.row(), index.column()]
             try: return f"{val:.6g}"
             except Exception: return str(val)
-        elif role == Qt.TextAlignmentRole:
-            return Qt.AlignRight | Qt.AlignVCenter
+        elif role == Qt.ItemDataRole.TextAlignmentRole:
+            return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         return None
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole:
-            if orientation == Qt.Horizontal: return self._headers[section]
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole:
+            if orientation == Qt.Orientation.Horizontal: return self._headers[section]
             else: return str(section)
         return None
 
@@ -182,7 +182,7 @@ class SweepTableDialog(QDialog):
         layout = QVBoxLayout(self)
 
         form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         if is_csv:
             form.addRow("Points:", QLabel(str(dataset.num_points)))
@@ -211,14 +211,14 @@ class SweepTableDialog(QDialog):
         self.table_view.setFont(font)
         
         header = self.table_view.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setDefaultSectionSize(120) 
 
         layout.addWidget(self.table_view)
 
         btn = QPushButton("Close")
         btn.clicked.connect(self.accept)
-        layout.addWidget(btn, alignment=Qt.AlignRight)
+        layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight)
 
 
 class ManageColumnsDialog(QDialog):
@@ -234,7 +234,7 @@ class ManageColumnsDialog(QDialog):
         # --- TAB 1: RENAME ---
         self.tab_rename = QWidget()
         form_rename = QFormLayout(self.tab_rename)
-        form_rename.setLabelAlignment(Qt.AlignRight)
+        form_rename.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         
         self.rename_combo = QComboBox()
         for idx, name in dataset.column_names.items():
@@ -251,7 +251,7 @@ class ManageColumnsDialog(QDialog):
         # --- TAB 2: DELETE ---
         self.tab_delete = QWidget()
         form_delete = QFormLayout(self.tab_delete)
-        form_delete.setLabelAlignment(Qt.AlignRight)
+        form_delete.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         
         self.delete_combo = QComboBox()
         for idx, name in dataset.column_names.items():
@@ -259,7 +259,7 @@ class ManageColumnsDialog(QDialog):
             
         form_delete.addRow("Column to delete:", self.delete_combo)
         warning_lbl = QLabel(f"<br><b style='color: {theme.danger_text};'>Warning: Deleting a column is irreversible!</b>")
-        warning_lbl.setAlignment(Qt.AlignCenter)
+        warning_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         form_delete.addRow("", warning_lbl)
         self.tab_delete.setLayout(form_delete)
         
@@ -368,7 +368,7 @@ class MetadataDialog(QDialog):
             
             general_group = QGroupBox("Folder Information")
             general_layout = QFormLayout()
-            general_layout.setLabelAlignment(Qt.AlignRight)
+            general_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
             
             general_layout.addRow("<b>Folder Name:</b>", QLabel(os.path.basename(dataset.filename)))
             general_layout.addRow("<b>Total CSV Files:</b>", QLabel(str(dataset.num_sweeps)))
@@ -414,7 +414,7 @@ class MetadataDialog(QDialog):
                 
             general_group = QGroupBox("File Information")
             general_layout = QFormLayout()
-            general_layout.setLabelAlignment(Qt.AlignRight)
+            general_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
             
             general_layout.addRow("<b>File Name:</b>", QLabel(os.path.basename(dataset.filename)))
             general_layout.addRow(f"<b style='color: {theme.primary_text};'>Is this a mirror file?:</b>", QLabel(f"<span style='color: {theme.primary_text};'><b>{is_mirror_str}</b></span>"))
@@ -434,7 +434,7 @@ class MetadataDialog(QDialog):
             
             acq_group = QGroupBox("Dataset Information")
             acq_layout = QFormLayout()
-            acq_layout.setLabelAlignment(Qt.AlignRight)
+            acq_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
             
             acq_layout.addRow("<b>Total Data Points:</b>", QLabel(str(dataset.num_points)))
             acq_layout.addRow("<b>Total Columns:</b>", QLabel(str(dataset.num_inputs)))
@@ -462,7 +462,7 @@ class MetadataDialog(QDialog):
                 
             general_group = QGroupBox("General Information")
             general_layout = QFormLayout()
-            general_layout.setLabelAlignment(Qt.AlignRight)
+            general_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
             
             d_name = getattr(dataset, 'name', 'Unknown')
             general_layout.addRow("<b>Name:</b>", QLabel(str(d_name)))
@@ -478,7 +478,7 @@ class MetadataDialog(QDialog):
             
             acq_group = QGroupBox("Acquisition Settings")
             acq_layout = QFormLayout()
-            acq_layout.setLabelAlignment(Qt.AlignRight)
+            acq_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
             
             acq_layout.addRow("<b>Settling Time:</b>", QLabel(f"{settling_time} ms"))
             acq_layout.addRow("<b>Sweep Delay:</b>", QLabel(f"{sweep_delay} ms"))
@@ -497,11 +497,11 @@ class MetadataDialog(QDialog):
                 dis_table = QTableWidget()
                 dis_table.setColumnCount(3)
                 dis_table.setHorizontalHeaderLabels(["Name", "Type", "Parked Value"])
-                dis_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-                dis_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-                dis_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+                dis_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+                dis_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+                dis_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
                 dis_table.verticalHeader().setVisible(False)
-                dis_table.setEditTriggers(QTableWidget.NoEditTriggers)
+                dis_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
                 dis_table.setAlternatingRowColors(True)
                 dis_table.setRowCount(len(disabled_insts))
                 
@@ -537,7 +537,7 @@ class MetadataDialog(QDialog):
         btn = QPushButton("Close")
         btn.setFixedWidth(100)
         btn.clicked.connect(self.accept)
-        layout.addWidget(btn, alignment=Qt.AlignRight)
+        layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight)
         
         self.setStyleSheet(f"""
             QGroupBox {{ font-weight: bold; border: 1px solid {theme.border}; border-radius: 6px; margin-top: 10px; padding-top: 15px; background-color: {theme.bg}; }}
@@ -585,9 +585,9 @@ class ConstantsDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["Key", "Name", "Value", "Units"])
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         
@@ -609,7 +609,7 @@ class ConstantsDialog(QDialog):
             self.table.setItem(row, 3, QTableWidgetItem(c["units"]))
             
         self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
         
         self.table.itemSelectionChanged.connect(self.on_select)
@@ -691,7 +691,7 @@ class CreateColumnDialog(QDialog):
 
         layout.addWidget(QLabel("<b>Live Preview:</b>"))
         self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setStyleSheet(f"background-color: {theme.panel_bg}; color: {theme.fg}; border: 1px solid {theme.border}; font-size: 22px; font-family: Cambria, serif; font-style: italic; padding: 10px;")
         self.preview_label.setMinimumHeight(120)
         layout.addWidget(self.preview_label)
@@ -717,7 +717,7 @@ class CreateColumnDialog(QDialog):
 
     def open_constants(self):
         dlg = ConstantsDialog(self)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_key:
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_key:
             self.equation_input.textCursor().insertText(f"{{\\{dlg.selected_key}}}")
 
     def handle_calculate(self):
