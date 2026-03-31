@@ -1431,28 +1431,81 @@ class BadgerLoopQtGraph(QMainWindow):
         
         import pyqtgraph as pg
         from PyQt6.QtCore import Qt
+        import numpy as np
         
-        # 1. Draw the Green Stars at the very tip of the peaks
-        scatter = pg.ScatterPlotItem(x=peaks_x, y=peaks_y, size=14, pen=pg.mkPen('k', width=1.5), brush=pg.mkBrush('#00ff00'), symbol='star')
-        target_vb.addItem(scatter)
-        self.peak_markers.append((scatter, target_vb))
+        num_peaks = len(peaks_x)
+        if num_peaks == 0: return
+
+        # --- NEW: INVERSE SCALING ENGINE ---
+        # Check if the X-axis is currently log-scaled and grab the base
+        xlog = self.xscale.currentText() == "Log"
+        xbase = self._parse_log_base(self.xbase.text())
         
-        # 2. Draw the horizontal FWHM lines (Red)
-        for lx, rx, h in zip(left_x, right_x, width_heights):
-            line = pg.PlotCurveItem(x=[lx, rx], y=[h, h], pen=pg.mkPen('r', width=2.5))
-            target_vb.addItem(line)
-            self.peak_markers.append((line, target_vb))
+        def to_raw_x(vis_x):
+            """Translates visual log coordinates back into physical linear values."""
+            if not xlog: return vis_x
+            with np.errstate(over='ignore', invalid='ignore'):
+                return float(np.power(xbase, vis_x))
+        # -----------------------------------
+        
+        if num_peaks <= 3:
+            # Add each individual peak and bandwidth to the legend
+            for i in range(num_peaks):
+                px, py = peaks_x[i], peaks_y[i]
+                lx, rx, h = left_x[i], right_x[i], width_heights[i]
+                
+                # Un-log the values specifically for the legend text
+                px_raw = to_raw_x(px)
+                w_val_raw = to_raw_x(rx) - to_raw_x(lx)
+                
+                # 1. The Peak Scatter (Red Circle)
+                scatter = pg.ScatterPlotItem(x=[px], y=[py], size=14, pen=pg.mkPen('k', width=1.5), brush=pg.mkBrush('r'), symbol='o')
+                target_vb.addItem(scatter)
+                self.peak_markers.append((scatter, target_vb, True, f"Peak {i+1}: ({px_raw:.3g}, {py:.3g})"))
+                
+                # 2. The Horizontal Bandwidth Line
+                line = pg.PlotCurveItem(x=[lx, rx], y=[h, h], pen=pg.mkPen('r', width=2.5))
+                target_vb.addItem(line)
+                self.peak_markers.append((line, target_vb, True, f"Peak {i+1} Width: {w_val_raw:.3g}"))
+                
+                # 3. Vertical Dashed Drop Lines (Don't add these to legend)
+                vline = pg.InfiniteLine(pos=px, angle=90, pen=pg.mkPen((150, 150, 150, 150), style=Qt.PenStyle.DashLine))
+                target_vb.addItem(vline)
+                self.peak_markers.append((vline, target_vb, False, None))
+        else:
+            # Too many peaks! Consolidate the legend using the raw physical widths.
+            widths_raw = [to_raw_x(rx) - to_raw_x(lx) for rx, lx in zip(right_x, left_x)]
+            avg_width_raw = np.mean(widths_raw)
             
-        # 3. Draw vertical dashed lines dropping down from the peak
-        for px in peaks_x:
-            vline = pg.InfiniteLine(pos=px, angle=90, pen=pg.mkPen((150, 150, 150, 150), style=Qt.PenStyle.DashLine))
-            target_vb.addItem(vline)
-            self.peak_markers.append((vline, target_vb))
+            # Draw all scatters as one item
+            scatter = pg.ScatterPlotItem(x=peaks_x, y=peaks_y, size=14, pen=pg.mkPen('k', width=1.5), brush=pg.mkBrush('r'), symbol='o')
+            target_vb.addItem(scatter)
+            self.peak_markers.append((scatter, target_vb, True, f"Detected Peaks (N={num_peaks})"))
+            
+            # Draw all widths and vlines
+            for i in range(num_peaks):
+                lx, rx, h = left_x[i], right_x[i], width_heights[i]
+                line = pg.PlotCurveItem(x=[lx, rx], y=[h, h], pen=pg.mkPen('r', width=2.5))
+                target_vb.addItem(line)
+                
+                add_to_legend = (i == 0) # Only tag the very first line so it shows up exactly once
+                self.peak_markers.append((line, target_vb, add_to_legend, f"Avg Width: {avg_width_raw:.3g}"))
+                
+                vline = pg.InfiniteLine(pos=peaks_x[i], angle=90, pen=pg.mkPen((150, 150, 150, 150), style=Qt.PenStyle.DashLine))
+                target_vb.addItem(vline)
+                self.peak_markers.append((vline, target_vb, False, None))
+                
+        # Finally, register the flagged items with the actual UI legend
+        for item, _, should_add, leg_name in self.peak_markers:
+            if should_add and leg_name:
+                self.fit_legend.addItem(item, leg_name)
 
     def clear_peak_markers(self):
         if hasattr(self, 'peak_markers'):
-            for item, vb in self.peak_markers:
-                try: vb.removeItem(item)
+            for item, vb, should_add, _ in self.peak_markers:
+                try: 
+                    vb.removeItem(item)
+                    if should_add: self.fit_legend.removeItem(item)
                 except: pass
             self.peak_markers.clear()
 
@@ -3465,6 +3518,14 @@ class BadgerLoopQtGraph(QMainWindow):
         self.func_details_btn.clicked.connect(self.show_function_details)
         controls.addWidget(self.func_details_btn)
 
+        # --- NEW: RESTORE PEAK FINDER MENU BUTTON ---
+        self.restore_peak_btn = QPushButton("Restore Peak Finder Menu")
+        self.restore_peak_btn.setStyleSheet(f"font-weight: bold; background-color: {theme.warning_bg}; color: {theme.warning_text}; padding: 6px; border: 2px solid {theme.warning_border}; border-radius: 4px;")
+        self.restore_peak_btn.clicked.connect(self._restore_peak_menu)
+        self.restore_peak_btn.setVisible(False)
+        controls.addWidget(self.restore_peak_btn)
+        # --------------------------------------------
+
         self.edit_fit_btn = QPushButton("Edit Fit")
         self.edit_fit_btn.clicked.connect(self.edit_fit)
         self.edit_fit_btn.setVisible(False)
@@ -3600,14 +3661,73 @@ class BadgerLoopQtGraph(QMainWindow):
         self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
 
     def open_legend_customizer(self, legend_item):
-        if not hasattr(self, 'current_legend_entries') or not self.current_legend_entries: return
-        dlg = LegendCustomizationDialog(self, self.current_legend_entries, self.legend_aliases, getattr(self, 'group_sweeps_legend', False))
+        is_fit_legend = (legend_item == getattr(self, 'fit_legend', None))
+        
+        # 1. Dynamically build entries based on the exact legend clicked
+        entries = []
+        for sample, label_item in legend_item.items:
+            # Retrieve the original unformatted name if it was aliased previously
+            base_name = getattr(label_item, 'base_name', label_item.text)
+            
+            # Extract styling for the preview
+            pen = getattr(sample, 'opts', {}).get('pen', 'k')
+            symbol = getattr(sample, 'opts', {}).get('symbol', None)
+            brush = getattr(sample, 'opts', {}).get('symbolBrush', None)
+            
+            entries.append({
+                "base_name": base_name,
+                "sig_key": base_name, # Fits use their base name as the key
+                "pen": pen,
+                "symbol": symbol,
+                "brush": brush
+            })
+            
+        if not entries: return
+        
+        # 2. Route to the correct alias dictionary
+        if not hasattr(self, 'fit_legend_aliases'):
+            self.fit_legend_aliases = {}
+            
+        current_aliases = self.fit_legend_aliases if is_fit_legend else self.legend_aliases
+        group_sweeps = False if is_fit_legend else getattr(self, 'group_sweeps_legend', False)
+        
+        # 3. Open the customisation dialog
+        from ui.custom_widgets import LegendCustomizationDialog
+        from PyQt6.QtWidgets import QDialog
+        
+        dlg = LegendCustomizationDialog(self, entries, current_aliases, group_sweeps, is_fit_legend=is_fit_legend)
+        
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            new_aliases, group_sweeps = dlg.get_result()
-            self.legend_aliases = new_aliases
-            self.group_sweeps_legend = group_sweeps
-            self.settings.setValue("group_sweeps_legend", group_sweeps)
-            self.plot()
+            new_aliases, group_sweeps_res = dlg.get_result()
+            
+            if is_fit_legend:
+                self.fit_legend_aliases = new_aliases
+                
+                # Update the fit legend text instantly in-place (avoids heavy math recalculations)
+                for sample, label_item in self.fit_legend.items:
+                    base_name = getattr(label_item, 'base_name', label_item.text)
+                    label_item.base_name = base_name # Lock the original name in memory
+                    
+                    new_text = new_aliases.get(base_name, base_name)
+                    
+                    import re
+                    html_text = re.sub(r'\^([\w\.\-]+)', r'<sup>\1</sup>', new_text)
+                    html_text = re.sub(r'_([\w\.\-]+)', r'<sub>\1</sub>', html_text)
+                    
+                    axis_colour = 'w' if self.bg_color_combo.currentText() == "Black" else 'k'
+                    label_item.setText(html_text, color=axis_colour)
+            else:
+                self.legend_aliases = new_aliases
+                self.group_sweeps_legend = group_sweeps_res
+                self.settings.setValue("group_sweeps_legend", group_sweeps_res)
+                self.plot() # Safe to trigger a full replot for standard data
+            
+    def _restore_peak_menu(self):
+        """Brings the Peak Finder menu back if it was hidden."""
+        if hasattr(self, 'peak_finder_tool') and self.peak_finder_tool is not None:
+            self.peak_finder_tool.show()
+            self.peak_finder_tool.raise_()
+            self.peak_finder_tool.activateWindow()
 
     def toggle_crosshairs(self):
         self.crosshairs_enabled = not getattr(self, 'crosshairs_enabled', False)
@@ -6149,6 +6269,14 @@ class BadgerLoopQtGraph(QMainWindow):
         self.loader_thread.error.connect(self._on_load_error)
         self.loader_thread.start()
         
+    def open_3d_volume_integrator(self):
+        """Lazily loads and triggers the 3D volume integration math engine."""
+        if not hasattr(self, 'volume_integrator_3d'):
+            from ui.dialogs.analysis_3d import VolumeIntegrator3D
+            self.volume_integrator_3d = VolumeIntegrator3D(self)
+            
+        self.volume_integrator_3d.calculate_volume()
+        
     def _update_context_menus(self):
         if not hasattr(self, 'analysis_menu') or not hasattr(self, 'fitting_menu'):
             return
@@ -6182,7 +6310,7 @@ class BadgerLoopQtGraph(QMainWindow):
         elif mode == "3D":
             # --- 3D ANALYSIS ---
             self.analysis_menu.addAction("Cross-Sectional Data Slicer").triggered.connect(lambda: print("Launch 3D Slicer"))
-            self.analysis_menu.addAction("Volume Integration (Area Under Surface)").triggered.connect(lambda: print("Launch 3D Volume Tool"))
+            self.analysis_menu.addAction("Volume Integration (Area Under Surface)").triggered.connect(self.open_3d_volume_integrator)
             self.analysis_menu.addAction("3D Peak & Valley Detection").triggered.connect(lambda: print("Launch 3D Peak Tool"))
             self.analysis_menu.addAction("Isoline / Contour Extraction").triggered.connect(lambda: print("Launch 3D Contour Tool"))
 
