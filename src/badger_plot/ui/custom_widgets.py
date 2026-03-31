@@ -333,27 +333,30 @@ except Exception:
     OPENGL_AVAILABLE = False
     
 class LegendCustomizationDialog(QDialog):
-    def __init__(self, main_window, entries, current_aliases, group_sweeps):
+    def __init__(self, main_window, entries, current_aliases, group_sweeps, is_fit_legend=False):
         super().__init__(main_window)
-        self.setWindowTitle("Customize Legend")
+        self.setWindowTitle("Customise Legend")
         self.setMinimumSize(650, 500)
         self.main_window = main_window
         self.entries = entries 
         self.aliases = current_aliases.copy()
+        self.is_fit_legend = is_fit_legend
         
         layout = QVBoxLayout(self)
         
         self.group_cb = QCheckBox("Group multiple sweeps into a single legend entry")
         self.group_cb.setChecked(group_sweeps)
         self.group_cb.setStyleSheet("font-weight: bold; color: #0055ff;")
-        layout.addWidget(self.group_cb)
         
-        layout.addWidget(QLabel("<b>Customize Labels:</b> <i>(Leave blank to use default. Use ^ for superscripts and _ for subscripts.)</i>"))
+        # Only show the grouping checkbox for raw data sweeps
+        if not self.is_fit_legend:
+            layout.addWidget(self.group_cb)
+        
+        layout.addWidget(QLabel("<b>Customise Labels:</b> <i>(Leave blank to use default. Use ^ for superscripts and _ for subscripts.)</i>"))
         
         self.table = QTableWidget()
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["Original Smart Name", "Custom Override"])
-        # PyQt6 Update: ResizeMode
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setAlternatingRowColors(True)
@@ -393,7 +396,6 @@ class LegendCustomizationDialog(QDialog):
         self.table.setRowCount(len(self.entries))
         for i, entry in enumerate(self.entries):
             def_item = QTableWidgetItem(entry["base_name"])
-            # PyQt6 Update: ItemFlag
             def_item.setFlags(def_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(i, 0, def_item)
             
@@ -414,7 +416,7 @@ class LegendCustomizationDialog(QDialog):
     def _update_preview(self):
         self.preview_legend.clear()
         import re
-        is_grouped = self.group_cb.isChecked()
+        is_grouped = self.group_cb.isChecked() and not self.is_fit_legend
         seen_groups = set()
 
         for entry in self.entries:
