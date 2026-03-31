@@ -614,7 +614,21 @@ class PeakFinderTool(QDialog):
         font = self.fft_toggle_btn.font()
         font.setPointSize(12); font.setBold(True)
         self.fft_toggle_btn.setFont(font)
-        layout.addWidget(self.fft_toggle_btn)
+        
+        # --- NEW: TOP BUTTON ROW ---
+        top_btn_layout = QHBoxLayout()
+        top_btn_layout.addWidget(self.fft_toggle_btn)
+        
+        self.hide_menu_btn = QPushButton("👁 Hide Menu (Keep Plot)")
+        self.hide_menu_btn.setStyleSheet(f"background-color: {theme.bg}; color: {theme.fg}; border: 1px solid {theme.border}; border-radius: 4px; padding: 6px;")
+        font = self.hide_menu_btn.font()
+        font.setPointSize(10); font.setBold(True)
+        self.hide_menu_btn.setFont(font)
+        self.hide_menu_btn.clicked.connect(self._hide_and_notify)
+        top_btn_layout.addWidget(self.hide_menu_btn)
+        
+        layout.addLayout(top_btn_layout)
+        # ---------------------------
         
         form = QFormLayout()
         self.prom_edit = QLineEdit("Auto")
@@ -1071,15 +1085,32 @@ class PeakFinderTool(QDialog):
             QMessageBox.critical(self, "Filter Error", f"Failed to apply iFFT filter:\n\n{e}")
 
     def closeEvent(self, event):
+        """Triggered ONLY when the user clicks the 'X'. Wipes the data completely."""
         self.selection_timer.stop()
         self.parent_gui.clear_peak_markers()
+        
+        # Hide the restore button since the tool is officially dead
+        if hasattr(self.parent_gui, 'restore_peak_btn'):
+            self.parent_gui.restore_peak_btn.setVisible(False)
+            
         super().closeEvent(event)
         
-# --- NEW FUNCTION: Restart the timer when the window is reopened ---
     def showEvent(self, event):
+        """Triggered when the window opens or is restored."""
         if hasattr(self, 'selection_timer') and not self.selection_timer.isActive():
             self.selection_timer.start(200)
+            
+        # Hide the restore button since the menu is back on screen
+        if hasattr(self.parent_gui, 'restore_peak_btn'):
+            self.parent_gui.restore_peak_btn.setVisible(False)
+            
         super().showEvent(event)
+        
+    def _hide_and_notify(self):
+        """Hides the dialog but keeps the data alive, triggering the main UI restore button."""
+        self.hide()
+        if hasattr(self.parent_gui, 'restore_peak_btn'):
+            self.parent_gui.restore_peak_btn.setVisible(True)
         
 class BaselineSubtractionDialog(QDialog):
     def __init__(self, main_window):
